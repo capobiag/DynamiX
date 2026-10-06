@@ -59,6 +59,21 @@ codebase when implementing or changing behavior.
 - Use a right-handed, Z-up coordinate system.
 - Store unit quaternions in `[x, y, z, w]` order.
 - Express bilateral constraints as `g(t, q) = 0`.
+- Use Moreau's theta method for time stepping.
+- Enforce constraints at the velocity level; do not solve them as position-level
+  constraints. Derive the velocity-level equations consistently with the
+  existing constraint and time-stepping conventions.
+
+## Contact detection
+
+- Contact detection is separate from the solver. The solver consumes only a
+  flat contact buffer and must not depend on how the contacts were detected.
+- Each contact stores a point, a normal, a gap (signed distance), and the
+  indices of the two bodies involved.
+- Use a fixed-capacity buffer with a valid count or mask so shapes stay static
+  and no dynamic allocation is needed. Define an explicit overflow policy.
+- Each backend works on its own array types; do not transfer arrays across
+  backends to detect contacts.
 
 ## Working in the repository
 
