@@ -6,8 +6,8 @@ Ultra-fast, modular multibody systems physics engine for systems with frictional
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pip install -e ".[viz]"        # matplotlib, for the pendulum animation
-.venv/bin/python examples/pendulum.py    # opens an animation window
-.venv/bin/python examples/pendulum.py --save pendulum.gif --no-show   # write a GIF instead
+.venv/bin/python examples/pendulum.py    # n-fold pendulum (default 3 links); opens an animation window
+.venv/bin/python examples/pendulum.py --links 5 --save pendulum.gif --no-show   # write a GIF instead
 .venv/bin/pytest
 ```
 
@@ -17,4 +17,7 @@ velocity in the body frame) connected by ball joints, stepped with
 Moreau's theta method and velocity-level bilateral constraints. Scenes are described with
 [esper](https://github.com/benmoran56/esper) components (`dynamix.ecs`), compiled once into flat
 NumPy buffers (`dynamix.core.compile_scene`), and stepped by `dynamix.numpy_backend.Engine`
-without touching the ECS. Contacts, JAX and Warp backends are not implemented yet.
+without touching the ECS. `dynamix.scenes.build_chain(n)` builds an n-fold rigid-link pendulum;
+it is validated against an independent Lagrangian reference in `tests/`. Contacts, JAX and Warp backends are not implemented yet.
+
+The mathematics behind the engine is described in [docs/theory.md](docs/theory.md).
