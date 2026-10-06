@@ -18,6 +18,8 @@ Moreau's theta method and velocity-level bilateral constraints. Scenes are descr
 [esper](https://github.com/benmoran56/esper) components (`dynamix.ecs`), compiled once into flat
 NumPy buffers (`dynamix.core.compile_scene`), and stepped by `dynamix.numpy_backend.Engine`
 without touching the ECS. `dynamix.scenes.build_chain(n)` builds an n-fold rigid-link pendulum;
-it is validated against an independent Lagrangian reference in `tests/`. Contacts, JAX and Warp backends are not implemented yet.
+it is validated against an independent Lagrangian reference in `tests/`. The constraint solve is block-sparse and banded (linear in chain length); install the optional
+`fast` extra (SciPy) for the banded Cholesky, otherwise a dense NumPy solve is used.
+Contacts, JAX and Warp backends are not implemented yet.
 
 The mathematics behind the engine is described in [docs/theory.md](docs/theory.md).

@@ -36,6 +36,8 @@ class Scene:
         for ent in (joint.body_a, joint.body_b):
             if ent != WORLD and not esper.has_component(ent, Body):
                 raise ValueError(f"entity {ent} is not a body")
+        if joint.body_a == joint.body_b:
+            raise ValueError("a joint must connect two distinct bodies")
         if joint.body_b == WORLD:
             raise ValueError("body_b must be a body; use body_a for the world")
         return esper.create_entity(joint)

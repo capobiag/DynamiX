@@ -207,11 +207,37 @@ u_{k+1} = u^\ast + M^{-1} J^\top \boldsymbol{\Lambda} .
 $$
 
 The matrix $G \in \mathbb{R}^{3 n_j \times 3 n_j}$ is symmetric positive definite whenever the constraints are
-independent. It is solved densely with `numpy.linalg.solve`. The product $M^{-1} J^\top$ is formed once per step
-by scaling the translational blocks with $1/m_i$ and the rotational blocks with $I_i^{-1}$.
+independent.
 
-For a chain, $G$ is block tridiagonal, because each joint couples only neighbouring joints. A banded or
-sparse solver is the natural next optimization for long chains.
+**Block-sparse Jacobian.** A joint touches at most two bodies, so $J$ is never formed as a dense
+$3 n_j \times 6 n$ matrix. Each joint has one *side* per attached body (the world has none). For the side
+of body $i$ with sign $s = +1$ for body $b$ and $s = -1$ for body $a$, the Jacobian block is
+
+$$
+J_{\text{side}} = \begin{pmatrix} s \, \mathbf{1}_3 & -s \, R_i [\mathbf{r}]_\times \end{pmatrix} ,
+$$
+
+and only the $3 \times 3$ rotational part changes from step to step. The products $J u$ and
+$M^{-1} J^\top \boldsymbol{\Lambda}$ are evaluated side by side and scattered to joints or bodies.
+
+**Banded Delassus matrix.** The $3 \times 3$ block $(j, k)$ of $G$ is non-zero only when joints $j$ and $k$
+share a body, and it is the sum over the shared bodies $i$ of
+
+$$
+G_{jk} = \sum_i J_{j,i} \, M_i^{-1} \, J_{k,i}^\top ,
+\qquad
+M_i^{-1} = \operatorname{diag}\left( \frac{1}{m_i} \mathbf{1}_3, \, I_i^{-1} \right) .
+$$
+
+The list of such side pairs is built once from the topology. Per step, the blocks are computed in one batched
+product and scattered into the lower triangle of a banded matrix. For a chain with joints numbered along the
+chain, $G$ is block tridiagonal with a constant half-bandwidth of 5 scalar entries, independent of $n$.
+
+**Banded Cholesky solve.** $G \boldsymbol{\Lambda} = \mathbf{b}$ is solved with a banded Cholesky factorization
+(`scipy.linalg.solveh_banded`, LAPACK `pbsv`) at a cost of $O(n_j \, k_d^2)$ for half-bandwidth $k_d$, so the
+cost per step is linear in the chain length. If SciPy is not installed, the band is expanded and solved densely
+with `numpy.linalg.solve`; the result is the same, only slower. For other topologies the bandwidth follows the
+joint numbering: joints that share a body should have nearby indices, otherwise the band becomes wide.
 
 ## 6. Drift stabilization
 

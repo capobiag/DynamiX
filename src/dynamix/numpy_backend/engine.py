@@ -16,16 +16,27 @@ import numpy as np
 
 from dynamix.core.buffers import SystemBuffers
 from dynamix.numpy_backend import quaternion as quat
-from dynamix.numpy_backend.constraints import ball_joint_jacobian, ball_joint_residual
+from dynamix.numpy_backend.ball_joint_system import BallJointSystem
+from dynamix.numpy_backend.banded import solve_spd_banded
 
 
 class Engine:
     def __init__(self, buffers: SystemBuffers):
         self.buf = buffers
-        n, nj = buffers.n_bodies, buffers.n_joints
         self.time = 0.0
-        self._jac = np.zeros((3 * nj, 6 * n))
         self._inertia_inv = np.linalg.inv(buffers.inertia_body)
+        self._joints = (
+            BallJointSystem(
+                buffers.joint_a,
+                buffers.joint_b,
+                buffers.joint_anchor_a,
+                buffers.joint_anchor_b,
+                buffers.mass,
+                self._inertia_inv,
+            )
+            if buffers.n_joints
+            else None
+        )
         self._q_th = np.empty_like(buffers.q)
         self._u_free = np.empty_like(buffers.u)
 
@@ -44,26 +55,15 @@ class Engine:
         u_free[:, :3] = v + dt * b.gravity
         u_free[:, 3:] = w - dt * np.einsum("nij,nj->ni", inertia_inv, gyro)
 
-        u_new = u_free
-        if b.n_joints:
-            jac = ball_joint_jacobian(
-                q_th, b.joint_a, b.joint_b, b.joint_anchor_a, b.joint_anchor_b, self._jac, rot
-            )
-            g = ball_joint_residual(
-                q_th, b.joint_a, b.joint_b, b.joint_anchor_a, b.joint_anchor_b, rot
-            )
-            n = b.n_bodies
-            # M^-1 J^T, stored transposed as (3 nj, 6 n)
-            jm = jac.reshape(-1, n, 2, 3).copy()
-            jm[:, :, 0, :] /= b.mass[None, :, None]
-            jm[:, :, 1, :] = np.einsum("rnk,nkl->rnl", jm[:, :, 1, :], inertia_inv)
-            jm = jm.reshape(-1, 6 * n)
-            schur = jm @ jac.T
-            rhs = -(b.stabilization / dt) * g.reshape(-1) - jac @ u_free.reshape(-1)
-            lam = np.linalg.solve(schur, rhs)
-            u_new = u_free + (lam @ jm).reshape(n, 6)
+        joints = self._joints
+        if joints is not None:
+            g = joints.update(q_th, rot)
+            band = joints.delassus_band()
+            rhs = -(b.stabilization / dt) * g.reshape(-1) - joints.jacobian_times(u_free)
+            impulse = solve_spd_banded(band, rhs)
+            joints.add_impulse(impulse.reshape(-1, 3), u_free)
 
-        u[:] = u_new
+        u[:] = u_free
         q[:, :3] = q_th[:, :3] + (1.0 - theta) * dt * v
         q[:, 3:] = quat.integrate(q_th[:, 3:], w, (1.0 - theta) * dt)
         self.time += dt
