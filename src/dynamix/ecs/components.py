@@ -58,6 +58,30 @@ class BallJoint:
 
 
 @dataclass
+class HingeJoint:
+    """Revolute joint: the anchors coincide and the hinge axes stay parallel.
+
+    ``axis_a`` and ``axis_b`` are the hinge axis in the frame of each body (the world frame for
+    ``WORLD``); they must coincide in the world frame in the initial configuration.
+    """
+
+    body_a: int
+    body_b: int
+    anchor_a: np.ndarray
+    anchor_b: np.ndarray
+    axis_a: np.ndarray
+    axis_b: np.ndarray
+
+    def __post_init__(self) -> None:
+        self.anchor_a = _vec(self.anchor_a, 3)
+        self.anchor_b = _vec(self.anchor_b, 3)
+        self.axis_a = _vec(self.axis_a, 3)
+        self.axis_b = _vec(self.axis_b, 3)
+        if np.linalg.norm(self.axis_a) == 0.0 or np.linalg.norm(self.axis_b) == 0.0:
+            raise ValueError("hinge axes must be non-zero")
+
+
+@dataclass
 class Gravity:
     acceleration: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
 

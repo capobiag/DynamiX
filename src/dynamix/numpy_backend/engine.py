@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from dynamix.core import joint_math as jm
 from dynamix.core.buffers import SystemBuffers
 from dynamix.numpy_backend import quaternion as quat
-from dynamix.numpy_backend.ball_joint_system import BallJointSystem
 from dynamix.numpy_backend.banded import solve_spd_banded
+from dynamix.numpy_backend.joint_system import JointSystem
 
 
 class Engine:
@@ -26,13 +27,16 @@ class Engine:
         self.time = 0.0
         self._inertia_inv = np.linalg.inv(buffers.inertia_body)
         self._joints = (
-            BallJointSystem(
+            JointSystem(
                 buffers.joint_a,
                 buffers.joint_b,
                 buffers.joint_anchor_a,
                 buffers.joint_anchor_b,
                 buffers.mass,
                 self._inertia_inv,
+                buffers.joint_kind,
+                buffers.joint_axis_a,
+                buffers.joint_axis_b,
             )
             if buffers.n_joints
             else None
@@ -51,9 +55,8 @@ class Engine:
         rot = quat.to_matrix(q_th[:, 3:])
         inertia_inv = self._inertia_inv
 
-        gyro = np.cross(w, np.einsum("nij,nj->ni", b.inertia_body, w))
         u_free[:, :3] = v + dt * b.gravity
-        u_free[:, 3:] = w - dt * np.einsum("nij,nj->ni", inertia_inv, gyro)
+        u_free[:, 3:] = w - dt * jm.gyroscopic_acceleration(np, b.inertia_body, inertia_inv, w)
 
         joints = self._joints
         if joints is not None:
@@ -61,7 +64,7 @@ class Engine:
             band = joints.delassus_band()
             rhs = -(b.stabilization / dt) * g.reshape(-1) - joints.jacobian_times(u_free)
             impulse = solve_spd_banded(band, rhs)
-            joints.add_impulse(impulse.reshape(-1, 3), u_free)
+            joints.add_impulse(impulse.reshape(-1, joints.rows), u_free)
 
         u[:] = u_free
         q[:, :3] = q_th[:, :3] + (1.0 - theta) * dt * v

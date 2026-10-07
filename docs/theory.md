@@ -103,6 +103,32 @@ Body $a$ may be the world. In that case $R_a$ is the identity, $\mathbf{x}_a = \
 fixed point in the world frame. Each joint removes three degrees of freedom. The residual is computed by
 `ball_joint_residual` in [constraints.py](../src/dynamix/numpy_backend/constraints.py).
 
+### 4.1b Hinge joint
+
+A hinge adds two rotational rows to the three point rows of the ball joint.
+Let $n_a, n_b$ be the hinge axis in body frames a and b, and let $p_1, p_2$ be
+two unit vectors in frame a perpendicular to $n_a$. The extra residuals are
+
+$$
+g_{3+i} = (R_a p_i)^\top (R_b n_b), \qquad i = 1, 2,
+$$
+
+which vanish exactly when the world axes $R_a n_a$ and $R_b n_b$ coincide.
+Their body-frame angular Jacobian rows are
+
+$$
+\frac{\partial g_{3+i}}{\partial \omega_a} = p_i \times \left(R_a^\top R_b n_b\right),
+\qquad
+\frac{\partial g_{3+i}}{\partial \omega_b} = n_b \times \left(R_b^\top R_a p_i\right),
+$$
+
+and the linear parts are zero. A hinge therefore has 5 rows, a ball joint 3.
+
+In a mixed system all joints are padded to the largest row count. Padded rows
+have a zero Jacobian and a unit diagonal in $G$, so their multipliers are zero
+and the banded solve keeps a uniform block size. The initial configuration must
+satisfy $R_a n_a = R_b n_b$.
+
 ### 4.2 Velocity-level form
 
 DynamiX enforces constraints on velocities. Differentiating $\mathbf{g} = \mathbf{0}$ in time gives
@@ -306,4 +332,12 @@ engine is a meaningful check of the constraint formulation and the time stepping
 - Contacts (unilateral constraints, friction): a contact buffer with point, normal, gap and body indices
   would be added as a further constraint set. Not implemented.
 - Joint types other than the ball joint, for example a hinge.
-- JAX and Warp backends: they will follow the same equations with their own array types.
+- A Warp backend: it will follow the same equations with its own array types.
+
+## 10. JAX backend
+
+`dynamix.jax_backend` implements Sections 2–6 unchanged; only the data layout differs. The step is a pure
+function of the state and constant parameters, so it can be jitted, batched with `vmap` and differentiated.
+The Delassus matrix is stored as 3 by 3 blocks in lower block-banded form, and for more than 10 joints it is
+factorized by a block Cholesky loop with closed-form 3 by 3 kernels. Small systems use a dense solve, which
+is faster there.

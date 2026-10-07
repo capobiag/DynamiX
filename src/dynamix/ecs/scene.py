@@ -6,7 +6,7 @@ import itertools
 
 import esper
 
-from dynamix.ecs.components import BallJoint, Body, Gravity, SimulationConfig
+from dynamix.ecs.components import BallJoint, Body, Gravity, HingeJoint, SimulationConfig
 
 # Sentinel entity id for the fixed world frame in joints.
 WORLD = -1
@@ -32,6 +32,12 @@ class Scene:
         return esper.create_entity(body)
 
     def add_ball_joint(self, joint: BallJoint) -> int:
+        return self._add_joint(joint)
+
+    def add_hinge_joint(self, joint: HingeJoint) -> int:
+        return self._add_joint(joint)
+
+    def _add_joint(self, joint: BallJoint | HingeJoint) -> int:
         self._activate()
         for ent in (joint.body_a, joint.body_b):
             if ent != WORLD and not esper.has_component(ent, Body):
@@ -46,9 +52,11 @@ class Scene:
         self._activate()
         return sorted(esper.get_component(Body), key=lambda item: item[0])
 
-    def ball_joints(self) -> list[tuple[int, BallJoint]]:
+    def joints(self) -> list[tuple[int, BallJoint | HingeJoint]]:
+        """All joints in creation order, regardless of kind."""
         self._activate()
-        return sorted(esper.get_component(BallJoint), key=lambda item: item[0])
+        found = esper.get_component(BallJoint) + esper.get_component(HingeJoint)
+        return sorted(found, key=lambda item: item[0])
 
     def close(self) -> None:
         esper.delete_world(self.name)

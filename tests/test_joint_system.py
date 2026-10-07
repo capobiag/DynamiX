@@ -5,9 +5,9 @@ import pytest
 
 from dynamix.numpy_backend import banded
 from dynamix.numpy_backend import quaternion as quat
-from dynamix.numpy_backend.ball_joint_system import BallJointSystem
 from dynamix.numpy_backend.banded import banded_to_dense, solve_spd_banded
 from dynamix.numpy_backend.constraints import ball_joint_jacobian, ball_joint_residual
+from dynamix.numpy_backend.joint_system import JointSystem
 
 # (joint_a, joint_b) lists: chain, branched tree with loop, joints out of body order
 TOPOLOGIES = {
@@ -28,7 +28,7 @@ def make_system(name, seed=0):
     mass = rng.uniform(0.5, 2.0, n)
     inertia = np.array([np.diag(rng.uniform(0.1, 1.0, 3)) for _ in range(n)])
     anchor_a, anchor_b = rng.normal(size=(2, len(joint_a), 3))
-    system = BallJointSystem(joint_a, joint_b, anchor_a, anchor_b, mass, np.linalg.inv(inertia))
+    system = JointSystem(joint_a, joint_b, anchor_a, anchor_b, mass, np.linalg.inv(inertia))
     rot = quat.to_matrix(q[:, 3:])
     system.update(q, rot)
     return system, q, rot, (joint_a, joint_b, anchor_a, anchor_b), mass, inertia
@@ -76,7 +76,7 @@ def test_chain_has_constant_bandwidth():
     joint_a = np.arange(-1, n - 1)
     joint_b = np.arange(n)
     anchors = np.zeros((n, 3))
-    system = BallJointSystem(
+    system = JointSystem(
         joint_a, joint_b, anchors, anchors, np.ones(n), np.broadcast_to(np.eye(3), (n, 3, 3))
     )
     assert system.half_bandwidth == 5
@@ -112,6 +112,6 @@ def test_rejects_degenerate_joints():
     eye = np.broadcast_to(np.eye(3), (2, 3, 3))
     zeros = np.zeros((1, 3))
     with pytest.raises(ValueError):
-        BallJointSystem([1], [1], zeros, zeros, np.ones(2), eye)
+        JointSystem([1], [1], zeros, zeros, np.ones(2), eye)
     with pytest.raises(ValueError):
-        BallJointSystem([], [], np.zeros((0, 3)), np.zeros((0, 3)), np.ones(2), eye)
+        JointSystem([], [], np.zeros((0, 3)), np.zeros((0, 3)), np.ones(2), eye)

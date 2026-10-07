@@ -10,6 +10,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dynamix.core import rotations
+from dynamix.core.joints import BALL, HINGE
+from dynamix.ecs.components import HingeJoint
 from dynamix.ecs.scene import WORLD, Scene
 
 
@@ -35,6 +38,9 @@ class SystemBuffers:
     theta: float
     stabilization: float
     body_entities: tuple[int, ...] = ()
+    joint_kind: np.ndarray | None = None  # (nj,) dynamix.core.joints.BALL / HINGE
+    joint_axis_a: np.ndarray | None = None  # (nj, 3) hinge axes (zero for other kinds)
+    joint_axis_b: np.ndarray | None = None
 
     @property
     def n_bodies(self) -> int:
@@ -47,7 +53,7 @@ class SystemBuffers:
 
 def compile_scene(scene: Scene) -> SystemBuffers:
     bodies = scene.bodies()
-    joints = scene.ball_joints()
+    joints = scene.joints()
     index = {ent: i for i, (ent, _) in enumerate(bodies)}
     n, nj = len(bodies), len(joints)
 
@@ -70,11 +76,24 @@ def compile_scene(scene: Scene) -> SystemBuffers:
     joint_b = np.zeros(nj, dtype=np.intp)
     anchor_a = np.zeros((nj, 3))
     anchor_b = np.zeros((nj, 3))
+    kind = np.full(nj, BALL, dtype=np.intp)
+    axis_a = np.zeros((nj, 3))
+    axis_b = np.zeros((nj, 3))
     for j, (_, jt) in enumerate(joints):
+        if isinstance(jt, HingeJoint):
+            kind[j], axis_a[j], axis_b[j] = HINGE, jt.axis_a, jt.axis_b
         joint_a[j] = WORLD if jt.body_a == WORLD else index[jt.body_a]
         joint_b[j] = index[jt.body_b]
         anchor_a[j] = jt.anchor_a
         anchor_b[j] = jt.anchor_b
+
+    rot = rotations.to_matrix(np, q[:, 3:])
+    for j in np.flatnonzero(kind == HINGE):
+        ax_a = axis_a[j] / np.linalg.norm(axis_a[j])
+        world_a = ax_a if joint_a[j] == WORLD else rot[joint_a[j]] @ ax_a
+        world_b = rot[joint_b[j]] @ (axis_b[j] / np.linalg.norm(axis_b[j]))
+        if np.linalg.norm(world_a - world_b) > 1e-6:
+            raise ValueError(f"hinge joint {j}: axes are not aligned in the initial configuration")
 
     cfg = scene.config
     return SystemBuffers(
@@ -91,4 +110,7 @@ def compile_scene(scene: Scene) -> SystemBuffers:
         theta=cfg.theta,
         stabilization=cfg.stabilization,
         body_entities=tuple(ent for ent, _ in bodies),
+        joint_kind=kind,
+        joint_axis_a=axis_a,
+        joint_axis_b=axis_b,
     )

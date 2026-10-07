@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from dynamix.ecs import WORLD, BallJoint, Body, Gravity, Scene, SimulationConfig
+from dynamix.ecs import WORLD, BallJoint, Body, Gravity, HingeJoint, Scene, SimulationConfig
 
 
 def _per_link(value: float | Sequence[float], n: int, name: str) -> np.ndarray:
@@ -23,13 +23,17 @@ def build_chain(
     mass: float | Sequence[float] = 1.0,
     config: SimulationConfig | None = None,
     gravity: float = 9.81,
+    joint: str = "ball",
 ) -> Scene:
     """Chain of ``n_links`` slender rods (an n-fold pendulum) hung from the world origin.
 
     Rods lie in the x-z plane, joined end to end (and to the world) by ball joints. Each body's
     local z axis runs along its rod with the upper joint at ``+length / 2``. ``angles[i]`` is the
     absolute rotation of link i about +y from the downward vertical (default: horizontal, at rest).
+    ``joint`` is ``"ball"`` or ``"hinge"`` (hinges about the y axis, i.e. a planar chain).
     """
+    if joint not in ("ball", "hinge"):
+        raise ValueError("joint must be 'ball' or 'hinge'")
     if n_links < 1:
         raise ValueError("n_links must be at least 1")
     phi = np.broadcast_to(np.asarray(angles, dtype=np.float64), (n_links,))
@@ -52,9 +56,12 @@ def build_chain(
                 orientation=np.array([0.0, np.sin(0.5 * phi[i]), 0.0, np.cos(0.5 * phi[i])]),
             )
         )
-        scene.add_ball_joint(
-            BallJoint(previous, body, anchor_a=previous_anchor, anchor_b=np.array([0.0, 0.0, half]))
-        )
+        anchor_b = np.array([0.0, 0.0, half])
+        if joint == "ball":
+            scene.add_ball_joint(BallJoint(previous, body, previous_anchor, anchor_b))
+        else:
+            axis = np.array([0.0, 1.0, 0.0])
+            scene.add_hinge_joint(HingeJoint(previous, body, previous_anchor, anchor_b, axis, axis))
         pivot = pivot + lengths[i] * down
         previous, previous_anchor = body, np.array([0.0, 0.0, -half])
     return scene
@@ -66,6 +73,7 @@ def build_pendulum(
     mass: float = 1.0,
     config: SimulationConfig | None = None,
     gravity: float = 9.81,
+    joint: str = "ball",
 ) -> Scene:
-    """Single slender rod hinged at the world origin by a ball joint, in the x-z plane."""
-    return build_chain(1, angle, length, mass, config, gravity)
+    """Single slender rod hung from the world origin by a ball or hinge joint, in the x-z plane."""
+    return build_chain(1, angle, length, mass, config, gravity, joint)
