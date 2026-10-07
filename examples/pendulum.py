@@ -1,8 +1,8 @@
 """Simulate an n-fold rigid-link pendulum, report energy drift and animate the motion.
 
 Usage: python examples/pendulum.py [--links 3] [--seconds 10] [--dt 1e-3] [--angle 1.5]
-                                   [--save pendulum.gif] [--no-show]
-Requires matplotlib (pip install -e ".[viz]").
+                                   [--backend numpy|jax] [--save pendulum.gif] [--no-show]
+Requires matplotlib (pip install -e ".[viz]"); the jax backend also needs ".[jax]".
 """
 
 import argparse
@@ -11,7 +11,6 @@ import numpy as np
 
 from dynamix.core import compile_scene
 from dynamix.ecs import SimulationConfig
-from dynamix.numpy_backend import Engine, total_energy
 from dynamix.numpy_backend import quaternion as quat
 from dynamix.numpy_backend.constraints import ball_joint_residual
 from dynamix.scenes import build_chain
@@ -19,40 +18,73 @@ from dynamix.scenes import build_chain
 FPS = 50
 
 
-def simulate(links: int, angle: float, seconds: float, dt: float):
+class Simulation:
+    """Uniform access to the NumPy and JAX engines: advance, positions, orientations, energy."""
+
+    def __init__(self, backend: str, buf):
+        self.backend = backend
+        if backend == "jax":
+            import dynamix.jax_backend as jb
+
+            self.engine = jb.Engine(buf)
+        else:
+            from dynamix.numpy_backend import Engine
+
+            self.engine = Engine(buf)
+        self.buf = buf
+
+    @property
+    def time(self) -> float:
+        return self.engine.time
+
+    @property
+    def q(self) -> np.ndarray:
+        return np.asarray(self.engine.state.q if self.backend == "jax" else self.buf.q)
+
+    def run(self, steps: int) -> None:
+        self.engine.run(steps)
+
+    def energy(self) -> float:
+        if self.backend == "jax":
+            return self.engine.total_energy()
+        from dynamix.numpy_backend import total_energy
+
+        return total_energy(self.buf)
+
+
+def simulate(links: int, angle: float, seconds: float, dt: float, backend: str = "numpy"):
     """Run the simulation; return (times, points) per frame plus energy drift and max joint gap.
 
-    ``points`` has shape (frames, links + 1, 3): the pivot, every joint and the free end.
+    ``points`` has shape (frames, links + 1, 3): the pivot, every joint and the free end. The
+    joint gap is sampled once per frame.
     """
     scene = build_chain(links, angle, config=SimulationConfig(dt=dt))
     buf = compile_scene(scene)
-    engine = Engine(buf)
-    e0 = total_energy(buf)
+    sim = Simulation(backend, buf)
+    e0 = sim.energy()
     energy_scale = float(buf.mass.sum() * np.linalg.norm(buf.gravity) * links)
 
     # Joint b-anchors sit on each body's upper end; the last body's lower end is the free tip.
     upper = buf.joint_anchor_b[buf.joint_b.argsort()]
     tip_local = -upper[-1]
 
-    def snapshot():
-        rot = quat.to_matrix(buf.q[:, 3:])
-        ends = buf.q[:, :3] + np.einsum("nij,nj->ni", rot, upper)
-        tip = buf.q[-1, :3] + rot[-1] @ tip_local
+    def snapshot(q):
+        rot = quat.to_matrix(q[:, 3:])
+        ends = q[:, :3] + np.einsum("nij,nj->ni", rot, upper)
+        tip = q[-1, :3] + rot[-1] @ tip_local
         return np.vstack((ends, tip))
 
     stride = max(1, round(1.0 / (FPS * dt)))
     times, frames = [], []
     max_gap = 0.0
-    for k in range(round(seconds / dt) + 1):
-        if k % stride == 0:
-            times.append(engine.time)
-            frames.append(snapshot())
-        engine.step()
-        g = ball_joint_residual(
-            buf.q, buf.joint_a, buf.joint_b, buf.joint_anchor_a, buf.joint_anchor_b
-        )
+    for _ in range(round(seconds / dt) // stride + 1):
+        q = sim.q.copy()
+        times.append(sim.time)
+        frames.append(snapshot(q))
+        g = ball_joint_residual(q, buf.joint_a, buf.joint_b, buf.joint_anchor_a, buf.joint_anchor_b)
         max_gap = max(max_gap, float(np.abs(g).max()))
-    drift = (total_energy(buf) - e0) / energy_scale
+        sim.run(stride)
+    drift = (sim.energy() - e0) / energy_scale
     return np.array(times), np.array(frames), drift, max_gap
 
 
@@ -103,11 +135,14 @@ def main() -> None:
     )
     parser.add_argument("--seconds", type=float, default=10.0)
     parser.add_argument("--dt", type=float, default=1e-3)
+    parser.add_argument("--backend", choices=("numpy", "jax"), default="numpy")
     parser.add_argument("--save", help="write the animation to this file (e.g. pendulum.gif)")
     parser.add_argument("--no-show", action="store_true", help="do not open a window")
     args = parser.parse_args()
 
-    times, points, drift, max_gap = simulate(args.links, args.angle, args.seconds, args.dt)
+    times, points, drift, max_gap = simulate(
+        args.links, args.angle, args.seconds, args.dt, args.backend
+    )
     print(f"energy drift / (m g L): {drift:.2e}, max joint gap: {max_gap:.1e}")
     animate(times, points, save=args.save, show=not args.no_show)
 
