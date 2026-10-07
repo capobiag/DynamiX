@@ -14,6 +14,16 @@ Ball joint (3 rows):  g = (x_b + R_b r_b) - (x_a + R_a r_a)
 Hinge joint (5 rows): the same point rows plus two orientation rows keeping the hinge axes
 parallel, g_i = (R_a p_i) . (R_b n_b) for p_1, p_2 perpendicular to the axis n_a in frame a:
     ang_a,i = p_i x (R_a^T R_b n_b),    ang_b,i = n_b x (R_b^T R_a p_i)
+Fixed joint (6 rows): the point rows plus three orientation rows keeping the relative rotation
+at its initial value C (R_b = R_a C). With M = C^T R_a^T R_b (identity at rest),
+    g_rot = vee(skew(M)),  ang_b = (tr(M) I - M^T) / 2,  ang_a = -(tr(M) I - M) C^T / 2
+Prismatic joint (5 rows): the three orientation rows above plus two translation rows keeping the
+displacement d = (x_b + R_b r_b) - (x_a + R_a r_a) along the axis n_a in frame a, with p_1, p_2
+perpendicular to n_a: g_i = (R_a p_i) . d. Their linear Jacobian is no longer E but
+    lin_b,i = R_a p_i,  lin_a = -lin_b
+    ang_a,i = p_i x (r_a + R_a^T d),  ang_b,i = r_b x (R_b^T R_a p_i)
+so a system containing a prismatic joint also carries the linear blocks ``lin`` (nj, rows, 3);
+for the other joint kinds ``lin`` is E padded to ``rows``.
 Joints with fewer rows than the system maximum are padded with zero rows (see ``joint_topology``).
 """
 
@@ -25,8 +35,8 @@ import numpy as np
 
 from dynamix.core import rotations
 
-BALL, HINGE = 0, 1
-ROWS = {BALL: 3, HINGE: 5}
+BALL, HINGE, FIXED, PRISMATIC = 0, 1, 2, 3
+ROWS = {BALL: 3, HINGE: 5, FIXED: 6, PRISMATIC: 5}
 POSITION_ROWS = 3
 
 
@@ -50,20 +60,55 @@ class HingeData(NamedTuple):
     perp_a: np.ndarray  # (m, 2, 3) unit vectors perpendicular to the hinge axis in frame a
 
 
+class FixedData(NamedTuple):
+    joint_a: np.ndarray
+    joint_b: np.ndarray
+    anchor_a: np.ndarray
+    anchor_b: np.ndarray
+    jw_a: np.ndarray
+    jw_b: np.ndarray
+    rel_rot: np.ndarray  # (m, 3, 3) C with R_b = R_a C at rest
+
+
+class PrismaticData(NamedTuple):
+    joint_a: np.ndarray
+    joint_b: np.ndarray
+    anchor_a: np.ndarray
+    anchor_b: np.ndarray
+    rel_rot: np.ndarray
+    perp_a: np.ndarray  # (m, 2, 3) unit vectors perpendicular to the slide axis in frame a
+
+
 class JointSet(NamedTuple):
     """Per-kind constant joint data; ``order`` restores joint order after grouping by kind."""
 
     ball: BallData | None
     hinge: HingeData | None
+    fixed: FixedData | None
+    prismatic: PrismaticData | None
     order: np.ndarray | None
 
     @property
+    def _present(self):
+        return (
+            (BALL, self.ball),
+            (HINGE, self.hinge),
+            (FIXED, self.fixed),
+            (PRISMATIC, self.prismatic),
+        )
+
+    @property
     def n_joints(self) -> int:
-        return sum(d.joint_b.shape[0] for d in (self.ball, self.hinge) if d is not None)
+        return sum(d.joint_b.shape[0] for _, d in self._present if d is not None)
 
     @property
     def rows(self) -> int:
-        return ROWS[HINGE] if self.hinge is not None else ROWS[BALL]
+        return max(ROWS[k] for k, d in self._present if d is not None)
+
+    @property
+    def general_lin(self) -> bool:
+        """True if some joint has a configuration dependent linear Jacobian (not just E)."""
+        return self.prismatic is not None
 
 
 def perpendicular_pair(axis: np.ndarray) -> np.ndarray:
@@ -75,32 +120,37 @@ def perpendicular_pair(axis: np.ndarray) -> np.ndarray:
     return np.stack((p1, np.cross(axis, p1)), axis=1)
 
 
-def build_joint_set(kind, joint_a, joint_b, anchor_a, anchor_b, axis_a, axis_b) -> JointSet:
+def build_joint_set(
+    kind, joint_a, joint_b, anchor_a, anchor_b, axis_a, axis_b, rel_rot=None
+) -> JointSet:
     """Group joints by kind on the host (NumPy arrays)."""
+    if rel_rot is None:
+        rel_rot = np.tile(np.eye(3), (kind.shape[0], 1, 1))
     skew_a, skew_b = rotations.skew(np, anchor_a), rotations.skew(np, anchor_b)
-    groups, indices = {}, {}
-    for k in (BALL, HINGE):
+    groups, indices = {}, []
+    for k in (BALL, HINGE, FIXED, PRISMATIC):
         idx = np.flatnonzero(kind == k)
         if idx.size == 0:
             continue
-        indices[k] = idx
-        common = (
-            joint_a[idx],
-            joint_b[idx],
-            anchor_a[idx],
-            anchor_b[idx],
-            skew_a[idx],
-            -skew_b[idx],
-        )
+        indices.append(idx)
+        ends = (joint_a[idx], joint_b[idx], anchor_a[idx], anchor_b[idx])
+        jw = (skew_a[idx], -skew_b[idx])
         if k == BALL:
-            groups[k] = BallData(*common)
-        else:
+            groups[k] = BallData(*ends, *jw)
+        elif k == HINGE:
             unit_a = axis_a[idx] / np.linalg.norm(axis_a[idx], axis=1, keepdims=True)
             unit_b = axis_b[idx] / np.linalg.norm(axis_b[idx], axis=1, keepdims=True)
-            groups[k] = HingeData(*common, unit_b, perpendicular_pair(unit_a))
-    grouped = np.concatenate(list(indices.values()))
+            groups[k] = HingeData(*ends, *jw, unit_b, perpendicular_pair(unit_a))
+        elif k == FIXED:
+            groups[k] = FixedData(*ends, *jw, rel_rot[idx])
+        else:
+            unit_a = axis_a[idx] / np.linalg.norm(axis_a[idx], axis=1, keepdims=True)
+            groups[k] = PrismaticData(*ends, rel_rot[idx], perpendicular_pair(unit_a))
+    grouped = np.concatenate(indices)
     order = None if np.array_equal(grouped, np.arange(grouped.size)) else np.argsort(grouped)
-    return JointSet(groups.get(BALL), groups.get(HINGE), order)
+    return JointSet(
+        groups.get(BALL), groups.get(HINGE), groups.get(FIXED), groups.get(PRISMATIC), order
+    )
 
 
 def _pad_rows(xp, a, rows):
@@ -139,20 +189,75 @@ def _hinge(xp, d, rot, pos, rows):
     return _pad_rows(xp, g, rows), _pad_rows(xp, ang_a, rows), _pad_rows(xp, ang_b, rows)
 
 
+def _orientation(xp, ra, rb, rel_rot):
+    """Rotation rows of the fixed and prismatic joints: g (m, 3), ang_a, ang_b (m, 3, 3)."""
+    c_t = xp.swapaxes(rel_rot, 1, 2)
+    mat = c_t @ (xp.swapaxes(ra, 1, 2) @ rb)
+    trace = (mat[:, 0, 0] + mat[:, 1, 1] + mat[:, 2, 2])[:, None, None]
+    eye = xp.eye(3, dtype=mat.dtype)
+    g = 0.5 * xp.stack(
+        (mat[:, 2, 1] - mat[:, 1, 2], mat[:, 0, 2] - mat[:, 2, 0], mat[:, 1, 0] - mat[:, 0, 1]),
+        axis=1,
+    )
+    ang_b = 0.5 * (trace * eye - xp.swapaxes(mat, 1, 2))
+    ang_a = -0.5 * (trace * eye - mat) @ c_t
+    return g, ang_a, ang_b
+
+
+def _fixed(xp, d, rot, pos, rows):
+    ra, rb, g_pos = _points(xp, d, rot, pos)
+    g_rot, rot_a, rot_b = _orientation(xp, ra, rb, d.rel_rot)
+    g = xp.concatenate((g_pos, g_rot), axis=1)
+    ang_a = xp.concatenate((ra @ d.jw_a, rot_a), axis=1)
+    ang_b = xp.concatenate((rb @ d.jw_b, rot_b), axis=1)
+    return _pad_rows(xp, g, rows), _pad_rows(xp, ang_a, rows), _pad_rows(xp, ang_b, rows)
+
+
+def _prismatic(xp, d, rot, pos, rows):
+    ra, rb, disp = _points(xp, d, rot, pos)
+    g_rot, rot_a, rot_b = _orientation(xp, ra, rb, d.rel_rot)
+    p_world = xp.einsum("mab,mib->mia", ra, d.perp_a)  # R_a p_i
+    g = xp.concatenate((g_rot, xp.einsum("mia,ma->mi", p_world, disp)), axis=1)
+    local = d.anchor_a + xp.einsum("mba,mb->ma", ra, disp)  # r_a + R_a^T d
+    ang_a = xp.concatenate((rot_a, xp.cross(d.perp_a, local[:, None, :])), axis=1)
+    rb_p = xp.einsum("mba,mib->mia", rb, p_world)
+    ang_b = xp.concatenate((rot_b, xp.cross(d.anchor_b[:, None, :], rb_p)), axis=1)
+    lin = xp.concatenate((xp.zeros_like(rot_a), p_world), axis=1)
+    return (
+        _pad_rows(xp, g, rows),
+        _pad_rows(xp, ang_a, rows),
+        _pad_rows(xp, ang_b, rows),
+        (_pad_rows(xp, lin, rows)),
+    )
+
+
 def evaluate(xp, joints: JointSet, q, rot):
-    """Return ``g`` (nj, rows) and ``ang`` (2 nj, rows, 3): ang_a blocks, then ang_b blocks."""
+    """Return ``(g, ang, lin)``.
+
+    ``g`` is (nj, rows); ``ang`` is (2 nj, rows, 3) with the ang_a blocks, then the ang_b blocks;
+    ``lin`` is the (nj, rows, 3) linear block of the b side (the a side is -lin), or None when it
+    is E for every joint (see ``JointSet.general_lin``).
+    """
     rows = joints.rows
     rot_ext = xp.concatenate((rot, xp.eye(3, dtype=rot.dtype)[None]))
     pos_ext = xp.concatenate((q[:, :3], xp.zeros((1, 3), q.dtype)))
+    general = joints.general_lin
     parts = []
-    if joints.ball is not None:
-        parts.append(_ball(xp, joints.ball, rot_ext, pos_ext, rows))
-    if joints.hinge is not None:
-        parts.append(_hinge(xp, joints.hinge, rot_ext, pos_ext, rows))
+    for kind, data in joints._present:
+        if data is None:
+            continue
+        func = {BALL: _ball, HINGE: _hinge, FIXED: _fixed, PRISMATIC: _prismatic}[kind]
+        out = func(xp, data, rot_ext, pos_ext, rows)
+        if general and len(out) == 3:
+            lin = xp.zeros((data.joint_b.shape[0], rows, 3), q.dtype)
+            lin = lin + xp.eye(rows, 3, dtype=q.dtype)
+            out = (*out, lin)
+        parts.append(out if general else out[:3])
     if len(parts) == 1:
-        g, ang_a, ang_b = parts[0]
+        merged = parts[0]
     else:
-        g, ang_a, ang_b = (xp.concatenate(x) for x in zip(*parts, strict=True))
+        merged = tuple(xp.concatenate(x) for x in zip(*parts, strict=True))
     if joints.order is not None:
-        g, ang_a, ang_b = g[joints.order], ang_a[joints.order], ang_b[joints.order]
-    return g, xp.concatenate((ang_a, ang_b))
+        merged = tuple(x[joints.order] for x in merged)
+    g, ang_a, ang_b = merged[:3]
+    return g, xp.concatenate((ang_a, ang_b)), (merged[3] if general else None)

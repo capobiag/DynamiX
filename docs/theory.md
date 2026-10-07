@@ -129,6 +129,66 @@ have a zero Jacobian and a unit diagonal in $G$, so their multipliers are zero
 and the banded solve keeps a uniform block size. The initial configuration must
 satisfy $R_a n_a = R_b n_b$.
 
+### 4.1c Fixed joint
+
+A fixed joint keeps the anchors together (the three point rows of the ball joint) and the
+relative orientation at its initial value $C = R_a^\top R_b\big|_{t=0}$. With
+
+$$
+M = C^\top R_a^\top R_b,
+$$
+
+which is the identity at rest, the three rotation residuals and their Jacobian blocks are
+
+$$
+g_{\mathrm{rot}} = \operatorname{vee}\left(\tfrac12 (M - M^\top)\right),
+\qquad
+\frac{\partial g_{\mathrm{rot}}}{\partial \omega_b} = \tfrac12\left(\operatorname{tr}(M) I - M^\top\right),
+\qquad
+\frac{\partial g_{\mathrm{rot}}}{\partial \omega_a} = -\tfrac12\left(\operatorname{tr}(M) I - M\right) C^\top .
+$$
+
+They follow from $\dot M = -[C^\top \omega_a]_\times M + M [\omega_b]_\times$ and the identity
+$\operatorname{vee}\left(\operatorname{skew}(M[w]_\times)\right) = \tfrac12(\operatorname{tr}(M) I - M^\top) w$.
+A fixed joint has 6 rows.
+
+### 4.1d Prismatic joint
+
+A prismatic joint keeps the relative orientation fixed (the three rows above) and restricts the
+displacement
+
+$$
+d = (x_b + R_b r_b) - (x_a + R_a r_a)
+$$
+
+to the slide axis $n_a$ given in frame a. With $p_1, p_2$ two unit vectors perpendicular to $n_a$,
+the two translation rows are
+
+$$
+g_i = (R_a p_i)^\top d, \qquad i = 1, 2 .
+$$
+
+Because the direction $R_a p_i$ rotates with body a, the linear Jacobian is no longer the constant
+$E$ of the other joints:
+
+$$
+\frac{\partial g_i}{\partial v_b} = -\frac{\partial g_i}{\partial v_a} = (R_a p_i)^\top,
+\qquad
+\frac{\partial g_i}{\partial \omega_a} = p_i \times \left(r_a + R_a^\top d\right),
+\qquad
+\frac{\partial g_i}{\partial \omega_b} = r_b \times \left(R_b^\top R_a p_i\right).
+$$
+
+A system containing a prismatic joint therefore carries the linear blocks explicitly, and the
+Delassus blocks become $\frac{1}{m} L_s L_t^\top + A_s I^{-1} A_t^\top$ with $L$ the linear and
+$A$ the angular block. The initial displacement must lie along the axis.
+
+### 4.1e Joint numbering
+
+The Delassus matrix is banded only if joints sharing a body have nearby indices. Joints are
+renumbered internally by reverse Cuthill-McKee on the graph of joints sharing a body, but only if
+that strictly narrows the band; results are independent of the creation order.
+
 ### 4.2 Velocity-level form
 
 DynamiX enforces constraints on velocities. Differentiating $\mathbf{g} = \mathbf{0}$ in time gives

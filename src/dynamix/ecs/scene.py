@@ -6,7 +6,18 @@ import itertools
 
 import esper
 
-from dynamix.ecs.components import BallJoint, Body, Gravity, HingeJoint, SimulationConfig
+from dynamix.ecs.components import (
+    BallJoint,
+    Body,
+    FixedJoint,
+    Gravity,
+    HingeJoint,
+    PrismaticJoint,
+    SimulationConfig,
+)
+
+Joint = BallJoint | HingeJoint | FixedJoint | PrismaticJoint
+JOINT_TYPES = (BallJoint, HingeJoint, FixedJoint, PrismaticJoint)
 
 # Sentinel entity id for the fixed world frame in joints.
 WORLD = -1
@@ -37,7 +48,13 @@ class Scene:
     def add_hinge_joint(self, joint: HingeJoint) -> int:
         return self._add_joint(joint)
 
-    def _add_joint(self, joint: BallJoint | HingeJoint) -> int:
+    def add_fixed_joint(self, joint: FixedJoint) -> int:
+        return self._add_joint(joint)
+
+    def add_prismatic_joint(self, joint: PrismaticJoint) -> int:
+        return self._add_joint(joint)
+
+    def _add_joint(self, joint: Joint) -> int:
         self._activate()
         for ent in (joint.body_a, joint.body_b):
             if ent != WORLD and not esper.has_component(ent, Body):
@@ -52,10 +69,10 @@ class Scene:
         self._activate()
         return sorted(esper.get_component(Body), key=lambda item: item[0])
 
-    def joints(self) -> list[tuple[int, BallJoint | HingeJoint]]:
+    def joints(self) -> list[tuple[int, Joint]]:
         """All joints in creation order, regardless of kind."""
         self._activate()
-        found = esper.get_component(BallJoint) + esper.get_component(HingeJoint)
+        found = [x for kind in JOINT_TYPES for x in esper.get_component(kind)]
         return sorted(found, key=lambda item: item[0])
 
     def close(self) -> None:

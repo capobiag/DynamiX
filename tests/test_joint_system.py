@@ -31,7 +31,9 @@ def make_system(name, seed=0):
     system = JointSystem(joint_a, joint_b, anchor_a, anchor_b, mass, np.linalg.inv(inertia))
     rot = quat.to_matrix(q[:, 3:])
     system.update(q, rot)
-    return system, q, rot, (joint_a, joint_b, anchor_a, anchor_b), mass, inertia
+    perm = system.joint_perm  # the system may renumber joints to narrow the band
+    ends = (joint_a[perm], joint_b[perm], anchor_a[perm], anchor_b[perm])
+    return system, q, rot, ends, mass, inertia
 
 
 def dense_jacobian(system, n_bodies):
@@ -115,3 +117,15 @@ def test_rejects_degenerate_joints():
         JointSystem([1], [1], zeros, zeros, np.ones(2), eye)
     with pytest.raises(ValueError):
         JointSystem([], [], np.zeros((0, 3)), np.zeros((0, 3)), np.ones(2), eye)
+
+
+def test_band_reducing_order_narrows_star_numbered_badly():
+    # chain 0-1-2-3 (joints) numbered in a scrambled way: (3, 0, 2, 1)
+    joint_a = np.array([2, -1, 0, 1])
+    joint_b = np.array([3, 0, 1, 2])
+    anchors = np.zeros((4, 3))
+    system = JointSystem(
+        joint_a, joint_b, anchors, anchors, np.ones(4), np.broadcast_to(np.eye(3), (4, 3, 3))
+    )
+    assert system.half_bandwidth <= 5
+    assert sorted(system.joint_perm) == [0, 1, 2, 3]

@@ -82,6 +82,43 @@ class HingeJoint:
 
 
 @dataclass
+class FixedJoint:
+    """Weld: the anchors coincide and the relative orientation stays at its initial value."""
+
+    body_a: int
+    body_b: int
+    anchor_a: np.ndarray
+    anchor_b: np.ndarray
+
+    def __post_init__(self) -> None:
+        self.anchor_a = _vec(self.anchor_a, 3)
+        self.anchor_b = _vec(self.anchor_b, 3)
+
+
+@dataclass
+class PrismaticJoint:
+    """Slider: the relative orientation is fixed and body b slides along ``axis_a``.
+
+    ``axis_a`` is the slide axis in the frame of body a (the world frame for ``WORLD``); the
+    anchors mark the points whose displacement must stay along it, so initially the world
+    displacement between them must be parallel to the axis.
+    """
+
+    body_a: int
+    body_b: int
+    anchor_a: np.ndarray
+    anchor_b: np.ndarray
+    axis_a: np.ndarray
+
+    def __post_init__(self) -> None:
+        self.anchor_a = _vec(self.anchor_a, 3)
+        self.anchor_b = _vec(self.anchor_b, 3)
+        self.axis_a = _vec(self.axis_a, 3)
+        if np.linalg.norm(self.axis_a) == 0.0:
+            raise ValueError("prismatic axis must be non-zero")
+
+
+@dataclass
 class Gravity:
     acceleration: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
 

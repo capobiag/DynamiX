@@ -37,6 +37,7 @@ class Engine:
                 buffers.joint_kind,
                 buffers.joint_axis_a,
                 buffers.joint_axis_b,
+                buffers.joint_rel_rot,
             )
             if buffers.n_joints
             else None

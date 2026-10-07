@@ -5,13 +5,20 @@ from __future__ import annotations
 from dynamix.core.joints import POSITION_ROWS
 
 
-def side_rate(xp, jw, sign, v_side, w_side):
-    """Per-side contribution J_side u to the joint velocity: [s v; 0] + jw w, shape (n, rows)."""
+def side_rate(xp, jw, sign, v_side, w_side, lin=None):
+    """Per-side contribution J_side u to the joint velocity, shape (n, rows).
+
+    ``lin`` is the (n, rows, 3) linear block of the b side (None: E, the first 3 rows).
+    """
     rows = jw.shape[1]
-    lin = sign[:, None] * v_side
-    if rows > POSITION_ROWS:
-        lin = xp.concatenate((lin, xp.zeros((lin.shape[0], rows - POSITION_ROWS), lin.dtype)), 1)
-    return lin + (jw @ w_side[:, :, None])[:, :, 0]
+    if lin is not None:
+        part = sign[:, None] * (lin @ v_side[:, :, None])[:, :, 0]
+    else:
+        part = sign[:, None] * v_side
+        if rows > POSITION_ROWS:
+            pad = xp.zeros((part.shape[0], rows - POSITION_ROWS), part.dtype)
+            part = xp.concatenate((part, pad), 1)
+    return part + (jw @ w_side[:, :, None])[:, :, 0]
 
 
 def gyroscopic_acceleration(xp, inertia_body, inertia_inv, w):

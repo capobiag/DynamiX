@@ -73,6 +73,7 @@ def make_params(buffers: SystemBuffers):
         buffers.joint_kind,
         buffers.joint_axis_a,
         buffers.joint_axis_b,
+        buffers.joint_rel_rot,
     )
     return params, system, bandwidth
 
@@ -97,12 +98,12 @@ def step(state, params, system, *, dt, theta, stabilization, block_bandwidth=0):
     u_free = jnp.concatenate((v + dt * params.gravity, w - dt * gyro), axis=1)
 
     if system is not None:
-        g, jw = bjs.update(system, q_th, rot)
-        band, ww = bjs.delassus_band(system, jw, block_bandwidth)
-        rhs = -(stabilization / dt) * g - bjs.jacobian_times(system, jw, u_free)
+        g, jw, lin = bjs.update(system, q_th, rot)
+        band, ww = bjs.delassus_band(system, jw, lin, block_bandwidth)
+        rhs = -(stabilization / dt) * g - bjs.jacobian_times(system, jw, lin, u_free)
         dense = g.shape[0] <= DENSE_SOLVE_MAX_JOINTS
         impulse = _solve(band, rhs.reshape(-1), block_bandwidth, dense).reshape(g.shape)
-        u_free = bjs.add_impulse(system, ww, impulse, u_free)
+        u_free = bjs.add_impulse(system, lin, ww, impulse, u_free)
 
     v_new, w_new = u_free[:, :3], u_free[:, 3:]
     q_new = jnp.concatenate(

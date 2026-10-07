@@ -6,6 +6,9 @@ body a)
 
     J_side = [ s E,  ang ]        (rows x 6; only the rows x 3 angular block varies)
 
+except for systems with a prismatic joint, where E is replaced by a configuration dependent
+``lin`` block (see ``dynamix.core.joints``).
+
 The Delassus matrix G = J M^-1 J^T is assembled from per-side blocks into lower banded storage.
 Its block (j, k) is non-zero only when joints j and k share a body, so for a chain with joints
 numbered along the chain the half-bandwidth is constant and the solve is O(n). Topology
@@ -24,11 +27,16 @@ from dynamix.core.joint_topology import build_joint_topology
 class JointSystem:
     def __init__(
         self, joint_a, joint_b, anchor_a, anchor_b, mass, inertia_inv, kind=None, axis_a=None,
-        axis_b=None,
+        axis_b=None, rel_rot=None,
     ):  # fmt: skip
         topo = build_joint_topology(
-            joint_a, joint_b, anchor_a, anchor_b, mass, inertia_inv, kind, axis_a, axis_b
+            joint_a, joint_b, anchor_a, anchor_b, mass, inertia_inv, kind, axis_a, axis_b, rel_rot
         )
+        self.joint_perm = topo.joint_perm
+        self._general_lin = topo.joints.general_lin
+        self._pair_joint_s = topo.side_joint[topo.pair_s]
+        self._pair_joint_t = topo.side_joint[topo.pair_t]
+        self.lin = None
         self.n_joints, self.rows = topo.n_joints, topo.rows
         self.side_joint, self.side_body, self.sign = topo.side_joint, topo.side_body, topo.sign
         self._joints, self._side_ang = topo.joints, topo.side_ang
@@ -63,8 +71,8 @@ class JointSystem:
 
     def update(self, q, rot) -> np.ndarray:
         """Evaluate g(q) into ``self.g`` and the angular Jacobian blocks into ``self.jw``."""
-        g, ang = jt.evaluate(np, self._joints, q, rot)
-        self.g = g
+        g, ang, lin = jt.evaluate(np, self._joints, q, rot)
+        self.g, self.lin = g, lin
         self.jw = ang[self._side_ang]
         return g
 
@@ -73,8 +81,12 @@ class JointSystem:
         r = self.rows
         np.matmul(self._inertia_inv_side, self.jw.transpose(0, 2, 1), out=self._ww)
         np.matmul(self.jw[self._pair_s], self._ww[self._pair_t], out=self._blocks)
+        if self._general_lin:
+            lin_s, lin_t = self.lin[self._pair_joint_s], self.lin[self._pair_joint_t]
+            self._blocks += self._pair_coeff[:, None, None] * (lin_s @ lin_t.transpose(0, 2, 1))
         values = self._blocks.reshape(-1, r * r)
-        values[:, : jt.POSITION_ROWS * (r + 1) : r + 1] += self._pair_coeff[:, None]
+        if not self._general_lin:
+            values[:, : jt.POSITION_ROWS * (r + 1) : r + 1] += self._pair_coeff[:, None]
         flat = np.bincount(
             self._target,
             weights=values.ravel()[self._keep],
@@ -88,7 +100,8 @@ class JointSystem:
     def jacobian_times(self, u) -> np.ndarray:
         """J u as a flat vector of length rows * n_joints; requires a prior ``update``."""
         body = self.side_body
-        rate = jm.side_rate(np, self.jw, self.sign, u[body, :3], u[body, 3:])
+        lin = None if self.lin is None else self.lin[self.side_joint]
+        rate = jm.side_rate(np, self.jw, self.sign, u[body, :3], u[body, 3:], lin)
         self._rate.fill(0.0)
         np.add.at(self._rate, self.side_joint, rate)
         return self._rate.reshape(-1)
@@ -96,7 +109,11 @@ class JointSystem:
     def add_impulse(self, impulse, u) -> None:
         """u += M^-1 J^T impulse in place; needs ``delassus_band`` first (it fills ``_ww``)."""
         local = impulse[self.side_joint]
-        d_lin = self._inv_mass_signed[:, None] * local[:, : jt.POSITION_ROWS]
+        if self._general_lin:
+            lin_t = self.lin[self.side_joint].transpose(0, 2, 1)
+            d_lin = self._inv_mass_signed[:, None] * (lin_t @ local[:, :, None])[:, :, 0]
+        else:
+            d_lin = self._inv_mass_signed[:, None] * local[:, : jt.POSITION_ROWS]
         d_ang = np.matmul(self._ww, local[:, :, None])[:, :, 0]
         np.add.at(u[:, :3], self.side_body, d_lin)
         np.add.at(u[:, 3:], self.side_body, d_ang)
