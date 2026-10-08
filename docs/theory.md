@@ -390,7 +390,6 @@ engine is a meaningful check of the constraint formulation and the time stepping
 ## 9. What is not covered yet
 
 - Friction and shapes other than spheres and planes.
-- Contacts in the JAX backend (NumPy only so far).
 - A Warp backend: it will follow the same equations with its own array types.
 
 ## 10. Contacts
@@ -457,3 +456,23 @@ function of the state and constant parameters, so it can be jitted, batched with
 The Delassus matrix is stored as 3 by 3 blocks in lower block-banded form, and for more than 10 joints it is
 factorized by a block Cholesky loop with closed-form 3 by 3 kernels. Small systems use a dense solve, which
 is faster there.
+
+### 11.1 Contacts in the JAX backend
+
+Detection and solver follow Section 10 with static shapes (`dynamix.jax_backend.contacts`):
+
+- The spheres are sorted by grid cell (edge: the largest diameter). Each sphere is tested against the next
+  `slots` spheres of its own cell and of 13 forward neighbour cells (`Engine(buffers, contact_slots=4)`), so
+  the candidate set has fixed size $14\,\mathrm{slots}\,n$. A cheap squared-distance test selects the hits, they
+  are compacted into the fixed-capacity buffer by a prefix sum, and the SDF geometry is evaluated on the
+  selected contacts only.
+- `overflow` is set if a grid cell holds more than `slots` spheres or if there are more hits than
+  `max_contacts`; in the latter case the deepest contacts are kept, as in the NumPy backend.
+- The block iteration runs in a `lax.while_loop` with the same early exit. Entries of the buffer beyond
+  `count` have zero weight. Without joints only the linear velocities are iterated; with joints each sweep is
+  followed by the joint correction using the Cholesky factor, which is computed once per step and also
+  serves the joint solve.
+- All contact arrays have the size `max_contacts`, so the cost of the iteration scales with the buffer size, not
+  with the number of active contacts. Choose `max_contacts` close to the expected maximum (about 2 per ball in a
+  pile). The `while_loop` is not reverse-mode differentiable; steps of scenes without colliders are
+  unchanged.

@@ -8,6 +8,11 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
+from dynamix.jax_backend.contacts import (  # noqa: E402
+    ContactParams,
+    ContactSettings,
+    make_contact_settings,
+)
 from dynamix.jax_backend.engine import (  # noqa: E402
     Engine,
     SimulationState,
@@ -21,6 +26,9 @@ from dynamix.jax_backend.engine import (  # noqa: E402
 )
 
 __all__ = [
+    "ContactParams",
+    "ContactSettings",
+    "make_contact_settings",
     "Engine",
     "SimulationState",
     "SystemParams",

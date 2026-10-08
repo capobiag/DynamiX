@@ -1,8 +1,10 @@
-"""A cube of balls falling onto a tilted plane, shown in 3D with PyVista (NumPy backend).
+"""A cube of balls falling onto a tilted plane, shown in 3D with PyVista.
 
 Usage: python examples/ball_pile.py [--balls 125] [--seconds 1.5] [--tilt 0.3]
+                                    [--backend numpy|jax]
                                     [--save pile.gif] [--no-show]
 The plane is tilted by --tilt radians about y; without friction the balls slide down the slope.
+The JAX timing excludes compilation.
 Requires pyvista (pip install -e ".[viz3d]").
 """
 
@@ -19,22 +21,38 @@ from dynamix.scenes import build_ball_pile
 FPS = 30
 
 
-def simulate(n_balls, radius, seconds, tilt, dt=1e-3):
-    config = SimulationConfig(dt=dt, max_contacts=12 * n_balls)
+def simulate(n_balls, radius, seconds, tilt, backend="numpy", dt=1e-3):
+    """Run the pile; return the frames, energy, lowest gap to the plane, elapsed time and steps."""
+    config = SimulationConfig(dt=dt, max_contacts=2 * n_balls)
     buf = compile_scene(build_ball_pile(n_balls, radius, config=config, tilt=tilt))
-    engine = Engine(buf)
     stride = max(1, int(round(1.0 / (FPS * dt))))
-    frames = [buf.q[:, :3].copy()]
-    steps = int(round(seconds / dt))
-    start = time.perf_counter()
-    for k in range(steps):
-        engine.step()
-        if (k + 1) % stride == 0:
-            frames.append(buf.q[:, :3].copy())
-    elapsed = time.perf_counter() - start
-    normal = buf.plane_normal[0]
-    depth = (buf.q[:, :3] @ normal - buf.plane_offset[0] - radius).min()
-    return np.array(frames), total_energy(buf), depth, elapsed, steps
+    steps = int(round(seconds / dt)) // stride * stride
+    initial = buf.q[:, :3].copy()
+    if backend == "jax":
+        import dynamix.jax_backend as jb
+
+        engine = jb.Engine(buf)
+        state0 = engine.state
+        engine.rollout(steps, stride).q.block_until_ready()  # compile; not timed
+        engine.state = state0
+        start = time.perf_counter()
+        recorded = engine.rollout(steps, stride)
+        recorded.q.block_until_ready()
+        elapsed = time.perf_counter() - start
+        frames = np.concatenate((initial[None], np.asarray(recorded.q)[:, :, :3]))
+        final_q, energy = np.asarray(engine.state.q), engine.total_energy()
+    else:
+        engine = Engine(buf)
+        frames = [initial]
+        start = time.perf_counter()
+        for k in range(steps):
+            engine.step()
+            if (k + 1) % stride == 0:
+                frames.append(buf.q[:, :3].copy())
+        elapsed = time.perf_counter() - start
+        frames, final_q, energy = np.array(frames), buf.q, total_energy(buf)
+    depth = (final_q[:, :3] @ buf.plane_normal[0] - buf.plane_offset[0] - radius).min()
+    return frames, energy, depth, elapsed, steps
 
 
 def main() -> None:
@@ -43,6 +61,7 @@ def main() -> None:
     parser.add_argument("--radius", type=float, default=0.1)
     parser.add_argument("--tilt", type=float, default=0.3, help="plane tilt about y, radians")
     parser.add_argument("--seconds", type=float, default=1.5)
+    parser.add_argument("--backend", choices=["numpy", "jax"], default="numpy")
     parser.add_argument("--save", default=None)
     parser.add_argument("--no-show", action="store_true")
     args = parser.parse_args()
@@ -51,7 +70,7 @@ def main() -> None:
         args.balls, args.radius, args.seconds, args.tilt
     )
     print(
-        f"simulated {steps} steps ({args.seconds} s) in {elapsed:.2f} s "
+        f"[{args.backend}] simulated {steps} steps in {elapsed:.2f} s "
         f"({1e3 * elapsed / steps:.3f} ms/step)"
     )
     print(f"{args.balls} balls, final energy {energy:.2f}, lowest gap to the plane {depth:.2e}")

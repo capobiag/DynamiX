@@ -14,16 +14,6 @@ import numpy as np
 from dynamix.core import contacts as ct
 from dynamix.core.buffers import SystemBuffers
 
-# Offsets of the 13 "forward" neighbour cells; together with the own cell they cover every pair of
-# adjacent cells exactly once.
-_FORWARD = [
-    (dx, dy, dz)
-    for dx in (-1, 0, 1)
-    for dy in (-1, 0, 1)
-    for dz in (-1, 0, 1)
-    if (dx, dy, dz) > (0, 0, 0)
-]
-
 
 def all_pairs(n: int) -> tuple[np.ndarray, np.ndarray]:
     """Every pair ``i < j`` (O(n^2); reference for the grid)."""
@@ -46,7 +36,7 @@ def grid_pairs(x: np.ndarray, cell: float) -> tuple[np.ndarray, np.ndarray]:
     cells, start, count = np.unique(key[order], return_index=True, return_counts=True)
 
     first, second = [], []
-    for off in [(0, 0, 0), *_FORWARD]:
+    for off in [(0, 0, 0), *ct.FORWARD_CELLS]:
         target = key + (off[0] * dims[1] + off[1]) * dims[2] + off[2]
         pos = np.minimum(np.searchsorted(cells, target), cells.shape[0] - 1)
         hit = np.flatnonzero(cells[pos] == target)

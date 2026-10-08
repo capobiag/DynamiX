@@ -5,9 +5,11 @@ Same step as ``dynamix.numpy_backend.engine`` (see docs/theory.md):
     M(u+ - u) = dt h(u) + J(q_th)^T lam
     J(q_th) u+ = -(stabilization / dt) g(q_th)
     q+     = q_th + (1 - theta) dt u+
-``step`` is a pure function of ``(state, params, system)``; ``run`` and ``rollout`` fuse many
-steps into a single compiled ``lax.scan``. All functions are vmap-able over states and
-differentiable with ``jax.grad``.
+Normal contacts (``contact_cfg`` given) are detected at q_th and solved after the joints; see
+``contacts.py``. ``step`` is a pure function of ``(state, params, system)``; ``run`` and
+``rollout`` fuse many steps into a single compiled ``lax.scan``. All functions are vmap-able over
+states; without contacts they are also differentiable with ``jax.grad`` (the contact iteration
+is a ``while_loop``).
 """
 
 from __future__ import annotations
@@ -19,13 +21,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import lax
+from jax.scipy.linalg import cho_solve
 
 from dynamix.core import joint_math as jm
 from dynamix.core.buffers import SystemBuffers
+from dynamix.jax_backend import contacts as bc
 from dynamix.jax_backend import joint_system as bjs
 from dynamix.jax_backend import quaternion as quat
 from dynamix.jax_backend.banded import (
     block_band_to_dense,
+    cholesky_block_banded,
+    solve_cholesky_block_banded,
     solve_spd_block_banded,
 )
 
@@ -44,6 +50,7 @@ class SystemParams(NamedTuple):
     inertia_body: jnp.ndarray  # (n, 3, 3)
     inertia_inv: jnp.ndarray  # (n, 3, 3)
     gravity: jnp.ndarray  # (3,)
+    contacts: bc.ContactParams | None = None  # collider arrays; None without colliders
 
 
 def make_state(buffers: SystemBuffers) -> SimulationState:
@@ -60,6 +67,7 @@ def make_params(buffers: SystemBuffers):
         jnp.asarray(buffers.inertia_body),
         jnp.asarray(inertia_inv),
         jnp.asarray(buffers.gravity),
+        bc.make_contact_params(buffers),
     )
     if buffers.n_joints == 0:
         return params, None, 0
@@ -78,14 +86,29 @@ def make_params(buffers: SystemBuffers):
     return params, system, bandwidth
 
 
-def _solve(band, rhs, block_bandwidth, dense):
+def _solve(band, rhs, dense):
     if dense:
         return jnp.linalg.solve(block_band_to_dense(band), rhs)
     return solve_spd_block_banded(band, rhs)
 
 
-@partial(jax.jit, static_argnames=("dt", "theta", "stabilization", "block_bandwidth"))
-def step(state, params, system, *, dt, theta, stabilization, block_bandwidth=0):
+def _factor(band, dense):
+    """Factor G once for the repeated joint solves of the contact iteration."""
+    if dense:
+        return jnp.linalg.cholesky(block_band_to_dense(band))
+    return cholesky_block_banded(band)
+
+
+def _solve_factored(factor, rhs, dense):
+    if dense:
+        return cho_solve((factor, True), rhs)
+    return solve_cholesky_block_banded(factor, rhs)
+
+
+@partial(
+    jax.jit, static_argnames=("dt", "theta", "stabilization", "block_bandwidth", "contact_cfg")
+)
+def step(state, params, system, *, dt, theta, stabilization, block_bandwidth=0, contact_cfg=None):
     q, u = state.q, state.u
     v, w = u[:, :3], u[:, 3:]
 
@@ -102,8 +125,28 @@ def step(state, params, system, *, dt, theta, stabilization, block_bandwidth=0):
         band, ww = bjs.delassus_band(system, jw, lin, block_bandwidth)
         rhs = -(stabilization / dt) * g - bjs.jacobian_times(system, jw, lin, u_free)
         dense = g.shape[0] <= DENSE_SOLVE_MAX_JOINTS
-        impulse = _solve(band, rhs.reshape(-1), block_bandwidth, dense).reshape(g.shape)
-        u_free = bjs.add_impulse(system, lin, ww, impulse, u_free)
+        if contact_cfg is None:
+            impulse = _solve(band, rhs.reshape(-1), dense)
+        else:
+            factor = _factor(band, dense)
+            impulse = _solve_factored(factor, rhs.reshape(-1), dense)
+        u_free = bjs.add_impulse(system, lin, ww, impulse.reshape(g.shape), u_free)
+
+    if contact_cfg is not None:
+        contacts = bc.detect(params.contacts, contact_cfg, q_th)
+        correct = None
+        if system is not None:
+            bias = -(stabilization / dt) * g
+
+            def correct(x):
+                u_x = x[:-1]
+                rhs_x = (bias - bjs.jacobian_times(system, jw, lin, u_x)).reshape(-1)
+                corr = _solve_factored(factor, rhs_x, dense).reshape(g.shape)
+                return x.at[:-1].set(bjs.add_impulse(system, lin, ww, corr, u_x)), jnp.max(
+                    jnp.abs(corr)
+                )
+
+        u_free = bc.solve(params.contacts, contact_cfg, dt, contacts, u, u_free, correct)
 
     v_new, w_new = u_free[:, :3], u_free[:, 3:]
     q_new = jnp.concatenate(
@@ -116,10 +159,24 @@ def step(state, params, system, *, dt, theta, stabilization, block_bandwidth=0):
     return SimulationState(q_new, u_free, state.time + dt)
 
 
-@partial(jax.jit, static_argnames=("steps", "dt", "theta", "stabilization", "block_bandwidth"))
-def run(state, params, system, *, steps, dt, theta, stabilization, block_bandwidth=0):
+@partial(
+    jax.jit,
+    static_argnames=("steps", "dt", "theta", "stabilization", "block_bandwidth", "contact_cfg"),
+)
+def run(
+    state,
+    params,
+    system,
+    *,
+    steps,
+    dt,
+    theta,
+    stabilization,
+    block_bandwidth=0,
+    contact_cfg=None,
+):
     """Advance ``steps`` steps inside one compiled loop."""
-    kwargs = {"dt": dt, "theta": theta, "stabilization": stabilization}
+    kwargs = {"dt": dt, "theta": theta, "stabilization": stabilization, "contact_cfg": contact_cfg}
 
     def body(s, _):
         return _step_impl(s, params, system, block_bandwidth, **kwargs), None
@@ -129,11 +186,31 @@ def run(state, params, system, *, steps, dt, theta, stabilization, block_bandwid
 
 @partial(
     jax.jit,
-    static_argnames=("steps", "stride", "dt", "theta", "stabilization", "block_bandwidth"),
+    static_argnames=(
+        "steps",
+        "stride",
+        "dt",
+        "theta",
+        "stabilization",
+        "block_bandwidth",
+        "contact_cfg",
+    ),
 )
-def rollout(state, params, system, *, steps, stride=1, dt, theta, stabilization, block_bandwidth=0):
+def rollout(
+    state,
+    params,
+    system,
+    *,
+    steps,
+    stride=1,
+    dt,
+    theta,
+    stabilization,
+    block_bandwidth=0,
+    contact_cfg=None,
+):
     """Like ``run`` but also returns the states every ``stride`` steps."""
-    kwargs = {"dt": dt, "theta": theta, "stabilization": stabilization}
+    kwargs = {"dt": dt, "theta": theta, "stabilization": stabilization, "contact_cfg": contact_cfg}
 
     def inner(s, _):
         return _step_impl(s, params, system, block_bandwidth, **kwargs), None
@@ -162,14 +239,16 @@ def total_energy(state, params):
 class Engine:
     """Convenience wrapper mirroring ``numpy_backend.Engine``; holds the (immutable) state."""
 
-    def __init__(self, buffers: SystemBuffers):
+    def __init__(self, buffers: SystemBuffers, contact_slots: int = 4):
         self.params, self.system, self.block_bandwidth = make_params(buffers)
+        self.contact_cfg = bc.make_contact_settings(buffers, contact_slots)
         self.state = make_state(buffers)
         self._kw = {
             "dt": float(buffers.dt),
             "theta": float(buffers.theta),
             "stabilization": float(buffers.stabilization),
             "block_bandwidth": self.block_bandwidth,
+            "contact_cfg": self.contact_cfg,
         }
 
     @property
@@ -188,6 +267,13 @@ class Engine:
             self.state, self.params, self.system, steps=steps, stride=stride, **self._kw
         )
         return frames
+
+    @property
+    def contacts(self):
+        """Contact buffer detected at the current configuration (None without colliders)."""
+        if self.contact_cfg is None:
+            return None
+        return bc.detect(self.params.contacts, self.contact_cfg, self.state.q)
 
     def total_energy(self) -> float:
         return float(total_energy(self.state, self.params))

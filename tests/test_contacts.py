@@ -323,3 +323,15 @@ def test_ball_pile_is_a_non_penetrating_cube_above_a_tilted_plane():
     clearance = x @ normal - buf.plane_offset[0] - 0.1
     assert clearance.min() > 0.0
     assert ContactDetector(buf).detect(buf.q).count == 0
+
+
+def test_sphere_touching_two_planes_gets_one_contact_per_plane():
+    scene = zero_gravity_scene()
+    ball(scene, [0.1, 0.0, 0.1], radius=0.2)
+    scene.add_plane(PlaneCollider(normal=np.array([0.0, 0.0, 1.0]), offset=0.0))
+    scene.add_plane(PlaneCollider(normal=np.array([1.0, 0.0, 0.0]), offset=0.0))
+    buf = compile_scene(scene)
+    c = ContactDetector(buf).detect(buf.q)
+    assert c.count == 2
+    np.testing.assert_allclose(sorted(c.normal[:2].tolist()), [[0, 0, 1], [1, 0, 0]])
+    np.testing.assert_allclose(sorted(c.gap[:2]), [-0.3, -0.1])

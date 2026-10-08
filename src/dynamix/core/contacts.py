@@ -28,6 +28,16 @@ from typing import NamedTuple
 
 import numpy as np
 
+# Offsets of the 13 "forward" neighbour cells of a uniform grid; together with the own cell they
+# cover every pair of adjacent cells exactly once.
+FORWARD_CELLS = [
+    (dx, dy, dz)
+    for dx in (-1, 0, 1)
+    for dy in (-1, 0, 1)
+    for dz in (-1, 0, 1)
+    if (dx, dy, dz) > (0, 0, 0)
+]
+
 
 class ContactBuffer(NamedTuple):
     body_a: np.ndarray  # (C,) integer body index, -1 for the world (plane)
@@ -68,8 +78,12 @@ def sphere_sdf(xp, x, centre, radius):
 
 
 def plane_sdf(xp, x, normal, offset):
-    """Signed distance of points ``x`` (m, 3) to planes ``normal . x = offset``; plus gradient."""
-    return xp.sum(x * normal, axis=-1) - offset, xp.broadcast_to(normal, x.shape)
+    """Signed distance of points ``x`` (..., 3) to planes ``normal . x = offset``; plus gradient.
+
+    ``x``, ``normal`` and ``offset`` broadcast against each other (e.g. spheres x planes).
+    """
+    sdf = xp.sum(x * normal, axis=-1) - offset
+    return sdf, xp.broadcast_to(normal, sdf.shape + (3,))
 
 
 def sphere_vs_sdf(xp, x_b, radius_b, sdf, grad):
