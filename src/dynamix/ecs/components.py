@@ -119,6 +119,43 @@ class PrismaticJoint:
 
 
 @dataclass
+class SphereCollider:
+    """Sphere centred at the body's centre of mass (attached to a body entity).
+
+    ``restitution`` is the Newton restitution coefficient of the material; a contact uses the
+    smaller of the two coefficients.
+    """
+
+    radius: float
+    restitution: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.radius <= 0.0:
+            raise ValueError("radius must be positive")
+        if not 0.0 <= self.restitution <= 1.0:
+            raise ValueError("restitution must be in [0, 1]")
+
+
+@dataclass
+class PlaneCollider:
+    """Static half-space ``normal . x >= offset`` in the world frame (the world body)."""
+
+    normal: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, 1.0]))
+    offset: float = 0.0
+    restitution: float = 0.0
+
+    def __post_init__(self) -> None:
+        normal = _vec(self.normal, 3)
+        norm = np.linalg.norm(normal)
+        if norm == 0.0:
+            raise ValueError("plane normal must be non-zero")
+        self.normal = normal / norm
+        self.offset = float(self.offset)
+        if not 0.0 <= self.restitution <= 1.0:
+            raise ValueError("restitution must be in [0, 1]")
+
+
+@dataclass
 class Gravity:
     acceleration: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
 
@@ -132,9 +169,22 @@ class SimulationConfig:
     theta: float = 0.5
     # Velocity-level position stabilization: g_dot = -(stabilization / dt) * g
     stabilization: float = 0.2
+    # Normal contacts (see docs/theory.md, "Contacts")
+    max_contacts: int | None = None  # contact buffer capacity; None: 8 per collider
+    contact_iterations: int = 50  # block-iteration cap per step
+    contact_tolerance: float = 1e-9  # stop when the impulse changes by less than this
+    contact_omega: float = 1.0  # relaxation of the projected Jacobi update
+    contact_stabilization: float = 0.0  # penetration recovery gain, like ``stabilization``
+    restitution_threshold: float = 1e-2  # approach speed below which e is treated as 0
 
     def __post_init__(self) -> None:
         if self.dt <= 0.0:
             raise ValueError("dt must be positive")
         if not 0.0 < self.theta <= 1.0:
             raise ValueError("theta must be in (0, 1]")
+        if self.max_contacts is not None and self.max_contacts < 1:
+            raise ValueError("max_contacts must be positive")
+        if self.contact_iterations < 1:
+            raise ValueError("contact_iterations must be positive")
+        if not 0.0 < self.contact_omega <= 1.0:
+            raise ValueError("contact_omega must be in (0, 1]")

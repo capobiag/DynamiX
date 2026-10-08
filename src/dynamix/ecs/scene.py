@@ -12,8 +12,10 @@ from dynamix.ecs.components import (
     FixedJoint,
     Gravity,
     HingeJoint,
+    PlaneCollider,
     PrismaticJoint,
     SimulationConfig,
+    SphereCollider,
 )
 
 Joint = BallJoint | HingeJoint | FixedJoint | PrismaticJoint
@@ -64,6 +66,26 @@ class Scene:
         if joint.body_b == WORLD:
             raise ValueError("body_b must be a body; use body_a for the world")
         return esper.create_entity(joint)
+
+    def add_sphere_collider(self, body: int, collider: SphereCollider) -> None:
+        self._activate()
+        if not esper.has_component(body, Body):
+            raise ValueError(f"entity {body} is not a body")
+        if esper.has_component(body, SphereCollider):
+            raise ValueError(f"body {body} already has a collider")
+        esper.add_component(body, collider)
+
+    def add_plane(self, plane: PlaneCollider) -> int:
+        self._activate()
+        return esper.create_entity(plane)
+
+    def sphere_colliders(self) -> dict[int, SphereCollider]:
+        self._activate()
+        return dict(esper.get_component(SphereCollider))
+
+    def planes(self) -> list[PlaneCollider]:
+        self._activate()
+        return [p for _, p in sorted(esper.get_component(PlaneCollider), key=lambda x: x[0])]
 
     def bodies(self) -> list[tuple[int, Body]]:
         self._activate()

@@ -389,12 +389,68 @@ engine is a meaningful check of the constraint formulation and the time stepping
 
 ## 9. What is not covered yet
 
-- Contacts (unilateral constraints, friction): a contact buffer with point, normal, gap and body indices
-  would be added as a further constraint set. Not implemented.
-- Joint types other than the ball joint, for example a hinge.
+- Friction and shapes other than spheres and planes.
+- Contacts in the JAX backend (NumPy only so far).
 - A Warp backend: it will follow the same equations with its own array types.
 
-## 10. JAX backend
+## 10. Contacts
+
+Contacts are frictionless, between spheres and between a sphere and a static plane. Detection is
+separate from the solver: it fills a fixed-capacity buffer of contact point, normal, gap, the two
+body indices and a restitution coefficient, and the solver reads nothing else.
+
+### 10.1 SDF contact
+
+A contact pairs a shape a with a probe sphere b of radius $r_b$ at $x_b$. With the signed distance
+$\mathrm{sdf}_a$ of the shape (negative inside),
+
+$$
+\phi = \mathrm{sdf}_a(x_b) - r_b, \qquad n = \nabla \mathrm{sdf}_a(x_b),
+$$
+
+where $n$ points from a to b. For a sphere a, $\mathrm{sdf}_a(x) = |x - x_a| - r_a$; for the plane
+$n_p \cdot x = d$ (world body, index $-1$), $\mathrm{sdf}(x) = n_p \cdot x - d$. The contact is
+active when $\phi \le 0$ at the midpoint configuration $q_\theta$ of the step, and its point is
+$p = x_b - (r_b + \phi/2)\, n$. There are no speculative contacts, so restitution is not blunted.
+
+### 10.2 Contact law
+
+The normal row has the linear blocks $\mp n^T$ for a and b. The angular blocks are
+$\mp (R^T (r \times n))^T$ with $r = p - x$; for spheres $r \times n = 0$, so they vanish and only
+linear velocities enter. With $u_N = J_N u$ the law at the velocity level is
+
+$$
+0 \le \lambda \;\perp\; J_N u^+ - b \ge 0, \qquad b = \max\!\left(-e\, u_N^-,\; -\beta \phi / \Delta t\right).
+$$
+
+Here $u_N^-$ is the normal relative velocity at the start of the step, $e$ is Newton's coefficient
+(the minimum of the two bodies; applied only above an approach speed threshold) and $\beta$ is the
+optional penetration recovery gain (`contact_stabilization`, default 0).
+
+### 10.3 Block iteration
+
+Each iteration performs a projected Jacobi update over all contacts in parallel,
+
+$$
+\lambda \leftarrow \max\!\left(0,\; \lambda - \frac{\omega\,(J_N u - b)}{s\, w}\right),
+$$
+
+with $w = 1/m_a + 1/m_b$ and $s$ the largest number of contacts on either body (this keeps the
+parallel update convergent). Then the joint constraints are re-imposed with the factorised joint
+Delassus matrix, $G\, \delta\Lambda = -(\gamma/\Delta t)\, g - J u$, so the final velocities satisfy
+the joints exactly. The loop stops when the impulse changes are below `contact_tolerance` or after
+`contact_iterations`. Without contacts the step is the joint-only path of Section 5.
+
+### 10.4 Limitations
+
+- Penetration of order $\Delta t\,|v|$ after a fast impact (set `contact_stabilization` to recover it).
+- Jacobi converges slowly in deep piles, so the iteration cap is reached and penetration grows with
+  the pile height; graph-coloured Gauss-Seidel would help.
+- Tunnelling is possible if a ball moves farther than its diameter in one step.
+- If more contacts are found than `max_contacts`, the deepest are kept, `overflow` is set and a
+  warning is issued.
+
+## 11. JAX backend
 
 `dynamix.jax_backend` implements Sections 2–6 unchanged; only the data layout differs. The step is a pure
 function of the state and constant parameters, so it can be jitted, batched with `vmap` and differentiated.

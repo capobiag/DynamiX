@@ -6,8 +6,10 @@ from dynamix.ecs.components import (
     FixedJoint,
     Gravity,
     HingeJoint,
+    PlaneCollider,
     PrismaticJoint,
     SimulationConfig,
+    SphereCollider,
 )
 from dynamix.ecs.scene import WORLD, Scene
 
@@ -18,7 +20,9 @@ __all__ = [
     "FixedJoint",
     "Gravity",
     "HingeJoint",
+    "PlaneCollider",
     "PrismaticJoint",
     "Scene",
     "SimulationConfig",
+    "SphereCollider",
 ]

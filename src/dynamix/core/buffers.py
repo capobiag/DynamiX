@@ -43,10 +43,30 @@ class SystemBuffers:
     joint_axis_a: np.ndarray | None = None  # (nj, 3) hinge / slide axes (zero otherwise)
     joint_axis_b: np.ndarray | None = None
     joint_rel_rot: np.ndarray | None = None  # (nj, 3, 3) initial R_a^T R_b (fixed, prismatic)
+    collider_radius: np.ndarray | None = None  # (n,) sphere radius, 0 for bodies without collider
+    collider_restitution: np.ndarray | None = None  # (n,)
+    plane_normal: np.ndarray | None = None  # (n_planes, 3) unit normals (free space: n.x >= d)
+    plane_offset: np.ndarray | None = None  # (n_planes,)
+    plane_restitution: np.ndarray | None = None  # (n_planes,)
+    max_contacts: int = 0  # contact buffer capacity
+    contact_iterations: int = 50
+    contact_tolerance: float = 1e-9
+    contact_omega: float = 1.0
+    contact_stabilization: float = 0.0
+    restitution_threshold: float = 1e-2
 
     @property
     def n_bodies(self) -> int:
         return self.q.shape[0]
+
+    @property
+    def has_contacts(self) -> bool:
+        """True if some collider can produce contacts (sphere pairs or sphere-plane)."""
+        if self.collider_radius is None:
+            return False
+        spheres = int(np.count_nonzero(self.collider_radius > 0.0))
+        planes = 0 if self.plane_offset is None else self.plane_offset.shape[0]
+        return spheres >= 2 or (spheres >= 1 and planes >= 1)
 
     @property
     def n_joints(self) -> int:
@@ -112,7 +132,19 @@ def compile_scene(scene: Scene) -> SystemBuffers:
             if np.abs(residual[j, : jt.ROWS[int(kind[j])]]).max() > 1e-6:
                 raise ValueError(f"joint {j}: not satisfied in the initial configuration")
 
+    radius = np.zeros(n)
+    restitution = np.zeros(n)
+    for ent, collider in scene.sphere_colliders().items():
+        radius[index[ent]] = collider.radius
+        restitution[index[ent]] = collider.restitution
+    planes = scene.planes()
+    plane_normal = np.array([p.normal for p in planes]).reshape(-1, 3)
+    plane_offset = np.array([p.offset for p in planes])
+    plane_restitution = np.array([p.restitution for p in planes])
+
     cfg = scene.config
+    n_colliders = int(np.count_nonzero(radius > 0.0))
+    max_contacts = cfg.max_contacts if cfg.max_contacts is not None else 8 * n_colliders
     return SystemBuffers(
         q=q,
         u=u,
@@ -131,4 +163,15 @@ def compile_scene(scene: Scene) -> SystemBuffers:
         joint_axis_a=axis_a,
         joint_axis_b=axis_b,
         joint_rel_rot=rel_rot,
+        collider_radius=radius,
+        collider_restitution=restitution,
+        plane_normal=plane_normal,
+        plane_offset=plane_offset,
+        plane_restitution=plane_restitution,
+        max_contacts=max_contacts,
+        contact_iterations=cfg.contact_iterations,
+        contact_tolerance=cfg.contact_tolerance,
+        contact_omega=cfg.contact_omega,
+        contact_stabilization=cfg.contact_stabilization,
+        restitution_threshold=cfg.restitution_threshold,
     )

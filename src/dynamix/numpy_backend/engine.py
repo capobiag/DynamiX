@@ -7,7 +7,8 @@ Per step (state at t_k = (q, u)):
     J(q_th) u+ = -(stabilization / dt) g(q_th)    (velocity-level constraint with drift correction)
     q+     = q_th + (1 - theta) dt u+
 Constraints are enforced on velocities; the bias term only counteracts drift.
-Contacts are not part of this stage.
+Normal contacts (SDF detection at q_th, block-iteration solve) follow the joint solve; see
+contact_solver.py.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from dynamix.core import joint_math as jm
 from dynamix.core.buffers import SystemBuffers
 from dynamix.numpy_backend import quaternion as quat
 from dynamix.numpy_backend.banded import solve_spd_banded
+from dynamix.numpy_backend.contact_solver import ContactSolver
+from dynamix.numpy_backend.contacts import ContactDetector
 from dynamix.numpy_backend.joint_system import JointSystem
 
 
@@ -42,6 +45,10 @@ class Engine:
             if buffers.n_joints
             else None
         )
+        has_contacts = buffers.has_contacts
+        self._detector = ContactDetector(buffers) if has_contacts else None
+        self._contact_solver = ContactSolver(buffers, self._joints) if has_contacts else None
+        self.contacts = None  # contact buffer of the last step
         self._q_th = np.empty_like(buffers.q)
         self._u_free = np.empty_like(buffers.u)
 
@@ -60,12 +67,18 @@ class Engine:
         u_free[:, 3:] = w - dt * jm.gyroscopic_acceleration(np, b.inertia_body, inertia_inv, w)
 
         joints = self._joints
+        g = band = None
         if joints is not None:
             g = joints.update(q_th, rot)
             band = joints.delassus_band()
             rhs = -(b.stabilization / dt) * g.reshape(-1) - joints.jacobian_times(u_free)
             impulse = solve_spd_banded(band, rhs)
             joints.add_impulse(impulse.reshape(-1, joints.rows), u_free)
+
+        if self._detector is not None:
+            self.contacts = self._detector.detect(q_th)
+            if self.contacts.count:
+                self._contact_solver.solve(self.contacts, u, u_free, g, band)
 
         u[:] = u_free
         q[:, :3] = q_th[:, :3] + (1.0 - theta) * dt * v
