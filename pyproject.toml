@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dynamix"
+version = "0.1.0"
+description = "Modular multibody physics engine with frictional contact."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "esper>=3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "scipy>=1.11"]
+fast = ["scipy>=1.11"]
+jax = ["jax>=0.4.30"]
+viz = ["matplotlib>=3.8", "pillow>=10"]
+viz3d = ["pyvista>=0.43", "imageio>=2.30"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "NPY"]
