@@ -1,12 +1,13 @@
-"""A cube of balls falling onto a tilted plane, animated (NumPy backend).
+"""A cube of balls falling onto a tilted plane, shown in 3D with PyVista (NumPy backend).
 
 Usage: python examples/ball_pile.py [--balls 125] [--seconds 1.5] [--tilt 0.3]
                                     [--save pile.gif] [--no-show]
 The plane is tilted by --tilt radians about y; without friction the balls slide down the slope.
-Requires matplotlib (pip install -e ".[viz]").
+Requires pyvista (pip install -e ".[viz3d]").
 """
 
 import argparse
+import time
 
 import numpy as np
 
@@ -24,13 +25,16 @@ def simulate(n_balls, radius, seconds, tilt, dt=1e-3):
     engine = Engine(buf)
     stride = max(1, int(round(1.0 / (FPS * dt))))
     frames = [buf.q[:, :3].copy()]
-    for k in range(int(round(seconds / dt))):
+    steps = int(round(seconds / dt))
+    start = time.perf_counter()
+    for k in range(steps):
         engine.step()
         if (k + 1) % stride == 0:
             frames.append(buf.q[:, :3].copy())
+    elapsed = time.perf_counter() - start
     normal = buf.plane_normal[0]
     depth = (buf.q[:, :3] @ normal - buf.plane_offset[0] - radius).min()
-    return np.array(frames), total_energy(buf), depth
+    return np.array(frames), total_energy(buf), depth, elapsed, steps
 
 
 def main() -> None:
@@ -43,42 +47,69 @@ def main() -> None:
     parser.add_argument("--no-show", action="store_true")
     args = parser.parse_args()
 
-    frames, energy, depth = simulate(args.balls, args.radius, args.seconds, args.tilt)
+    frames, energy, depth, elapsed, steps = simulate(
+        args.balls, args.radius, args.seconds, args.tilt
+    )
+    print(
+        f"simulated {steps} steps ({args.seconds} s) in {elapsed:.2f} s "
+        f"({1e3 * elapsed / steps:.3f} ms/step)"
+    )
     print(f"{args.balls} balls, final energy {energy:.2f}, lowest gap to the plane {depth:.2e}")
 
-    import matplotlib
+    import pyvista as pv
 
-    if args.no_show:
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.animation import FuncAnimation
+    normal = np.array([np.sin(args.tilt), 0.0, np.cos(args.tilt)])
+    start = frames[0]
+    centre = frames[..., :3].reshape(-1, 3).mean(axis=0)
+    centre -= (centre @ normal) * normal  # point of the plane below the balls' mean position
+    size = 2.0 * np.abs(frames[..., :3].reshape(-1, 3) - centre).max()
+    plane = pv.Plane(center=centre, direction=normal, i_size=size, j_size=size)
 
-    pad = 2 * args.radius
-    x_lo, x_hi = frames[..., 0].min() - pad, frames[..., 0].max() + pad
-    z_lo, z_hi = frames[..., 2].min() - pad, frames[..., 2].max() + pad
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.set_xlim(x_lo, x_hi)
-    ax.set_ylim(z_lo, z_hi)
-    ax.set_aspect("equal")
-    normal = np.array([np.sin(args.tilt), np.cos(args.tilt)])  # (x, z) of the plane normal
-    xs = np.array([x_lo, x_hi])
-    ax.plot(xs, -normal[0] / normal[1] * xs, color="k")
-    # side view (x-z); marker size in points^2 for a diameter of 2 * radius in data units
-    points_per_unit = fig.get_figwidth() * 72 / (x_hi - x_lo) * 0.8
-    scatter = ax.scatter(
-        frames[0][:, 0], frames[0][:, 2], s=(2 * args.radius * points_per_unit) ** 2, alpha=0.6
+    cloud = pv.PolyData(start.copy())
+    cloud["height"] = start @ normal  # initial height above the plane, fixed colour per ball
+    template = pv.Sphere(radius=args.radius, theta_resolution=24, phi_resolution=24)
+
+    plotter = pv.Plotter(off_screen=args.no_show, window_size=(900, 700))
+    plotter.add_mesh(plane, color="lightgray", opacity=0.8, show_edges=True)
+    actor = plotter.add_mesh(
+        cloud.glyph(geom=template, scale=False, orient=False),
+        scalars="height",
+        cmap="viridis",
+        show_scalar_bar=False,
+        smooth_shading=True,
     )
+    plotter.add_axes()
+    plotter.camera_position = "iso"
 
-    def update(k):
-        scatter.set_offsets(frames[k][:, [0, 2]])
-        ax.set_title(f"frame {k}")
-        return (scatter,)
+    def show_frame(k):
+        nonlocal actor
+        cloud.points = frames[k]
+        plotter.remove_actor(actor, render=False)
+        actor = plotter.add_mesh(
+            cloud.glyph(geom=template, scale=False, orient=False),
+            scalars="height",
+            cmap="viridis",
+            show_scalar_bar=False,
+            smooth_shading=True,
+            reset_camera=False,
+        )
+        plotter.add_text(f"t = {k / FPS:.2f} s", name="time", font_size=10)
 
-    anim = FuncAnimation(fig, update, frames=len(frames), interval=1000 / FPS, blit=False)
     if args.save:
-        anim.save(args.save, writer="pillow", fps=FPS)
+        plotter.open_gif(args.save, fps=FPS)
+        for k in range(len(frames)):
+            show_frame(k)
+            plotter.write_frame()
     if not args.no_show:
-        plt.show()
+        plotter.show(interactive_update=True, auto_close=False)
+        while not plotter._closed:
+            for k in range(len(frames)):
+                if plotter._closed:
+                    break
+                show_frame(k)
+                plotter.update()
+                time.sleep(1.0 / FPS)
+    plotter.close()
 
 
 if __name__ == "__main__":

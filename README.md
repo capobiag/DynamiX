@@ -17,7 +17,7 @@ velocity in the body frame) connected by ball, hinge, fixed or prismatic joints 
 Moreau's theta method and velocity-level bilateral constraints. Frictionless normal contacts
 (sphere-sphere and sphere-plane via SDFs, Newton restitution; NumPy only so far) are added with
 `SphereCollider`/`PlaneCollider`; see `build_bouncing_ball`, `build_ball_pile` and
-`benchmarks/contacts_balls.py`; examples: `examples/bouncing_ball.py`, `examples/ball_pile.py`. Scenes are described with
+`benchmarks/contacts_balls.py`; examples: `examples/bouncing_ball.py`, `examples/ball_pile.py` (3D, PyVista: `pip install -e ".[viz3d]"`). Scenes are described with
 [esper](https://github.com/benmoran56/esper) components (`dynamix.ecs`), compiled once into flat
 NumPy buffers (`dynamix.core.compile_scene`), and stepped by `dynamix.numpy_backend.Engine`
 without touching the ECS. `dynamix.scenes.build_chain(n)` builds an n-fold rigid-link pendulum;

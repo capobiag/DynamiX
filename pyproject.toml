@@ -15,6 +15,7 @@ dev = ["pytest>=8", "ruff>=0.5", "scipy>=1.11"]
 fast = ["scipy>=1.11"]
 jax = ["jax>=0.4.30"]
 viz = ["matplotlib>=3.8", "pillow>=10"]
+viz3d = ["pyvista>=0.43", "imageio>=2.30"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
