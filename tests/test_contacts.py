@@ -19,7 +19,7 @@ from dynamix.ecs import (
 from dynamix.numpy_backend import Engine
 from dynamix.numpy_backend.contacts import ContactDetector, all_pairs, grid_pairs
 from dynamix.numpy_backend.engine import total_energy
-from dynamix.scenes import build_ball_pile, build_bouncing_ball
+from dynamix.scenes import build_ball_box, build_ball_pile, build_bouncing_ball
 
 
 def ball(scene, position, radius=0.5, mass=1.0, restitution=0.0, velocity=(0, 0, 0)):
@@ -335,3 +335,16 @@ def test_sphere_touching_two_planes_gets_one_contact_per_plane():
     assert c.count == 2
     np.testing.assert_allclose(sorted(c.normal[:2].tolist()), [[0, 0, 1], [1, 0, 0]])
     np.testing.assert_allclose(c.gap[:2], [-0.1, -0.1])
+
+
+@pytest.mark.parametrize("side", [1, 2, 4])
+def test_ball_box_has_every_lattice_contact_and_keeps_them(side):
+    config = SimulationConfig(max_contacts=8 * side**3 + 8)
+    buf = compile_scene(build_ball_box(side, config=config))
+    expected = 3 * side**2 * (side - 1) + 5 * side**2
+    detector = ContactDetector(buf)
+    assert detector.detect(buf.q).count == expected
+    engine = Engine(buf)
+    engine.run(100)
+    assert engine.contacts.count == expected
+    assert not engine.contacts.overflow

@@ -156,3 +156,43 @@ def build_ball_pile(
         _add_ball(scene, centre, radius, mass, restitution)
     scene.add_plane(PlaneCollider(normal=normal, restitution=restitution))
     return scene
+
+
+def build_ball_box(
+    side: int = 10,
+    radius: float = 0.1,
+    mass: float = 1.0,
+    config: SimulationConfig | None = None,
+    gravity: float = 9.81,
+    overlap: float = 1e-3,
+) -> Scene:
+    """A ``side**3`` cubic stack of balls resting in a closed box (floor and four walls).
+
+    Neighbouring balls, the bottom layer and the floor, and the outer balls and the walls all
+    overlap by ``overlap`` times the radius per surface (the lattice spacing is
+    ``2 radius (1 - overlap)``), so every lattice neighbour is in contact from the first step:
+    ``3 side**2 (side - 1)`` sphere pairs plus ``5 side**2`` plane contacts. The stack is
+    symmetric, so (without friction) it stays a stack and the contact set does not change; this
+    makes it a benchmark with a known, constant number of contacts.
+    """
+    if side < 1:
+        raise ValueError("side must be at least 1")
+    if not 0.0 < overlap < 0.5:
+        raise ValueError("overlap must be in (0, 0.5)")
+    spacing = 2.0 * radius * (1.0 - overlap)
+    inset = radius * (1.0 - overlap)  # distance of the outer centres from the walls
+    half = 0.5 * (side - 1) * spacing + inset
+    index = np.arange(side**3)
+    cell = np.stack([index % side, (index // side) % side, index // side**2], axis=1)
+    centres = cell * spacing + np.array([inset - half, inset - half, inset])
+
+    scene = Scene(config, Gravity(np.array([0.0, 0.0, -gravity])))
+    for centre in centres:
+        _add_ball(scene, centre, radius, mass, 0.0)
+    scene.add_plane(PlaneCollider())
+    for axis in (0, 1):
+        for sign in (1.0, -1.0):
+            normal = np.zeros(3)
+            normal[axis] = sign
+            scene.add_plane(PlaneCollider(normal=normal, offset=-half))
+    return scene

@@ -53,6 +53,18 @@ pile of balls on a tilted plane (Apple M1, CPU, float64, ms/step, contact buffer
 
 JAX cost scales with the buffer size, NumPy cost with the number of active contacts.
 
+`benchmarks/contacts_box.py` compares equal work: a cubic stack of balls resting in a closed box
+(`build_ball_box`) with a known, constant contact set, a fixed number of sweeps per step and
+separate detection and solve times (Apple M1, CPU, float64, ms/step, 20 sweeps, buffer = contacts):
+
+| balls | contacts | NumPy | JAX `run` | speedup |
+|------:|---------:|------:|----------:|--------:|
+| 1000  | 3200     | 4.46  | 2.01      | 2.2x    |
+| 8000  | 24800    | 31.6  | 13.7      | 2.3x    |
+| 27000 | 82800    | 106.1 | 46.6      | 2.3x    |
+
+With a buffer 4 times the contact count JAX is slower than NumPy (0.7x).
+
 Friction and the Warp backend are not implemented yet.
 
 The mathematics behind the engine is described in [docs/theory.md](docs/theory.md).

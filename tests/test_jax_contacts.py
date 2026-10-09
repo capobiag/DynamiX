@@ -20,7 +20,7 @@ from dynamix.ecs import (  # noqa: E402
 from dynamix.jax_backend import contacts as bc  # noqa: E402
 from dynamix.numpy_backend import Engine  # noqa: E402
 from dynamix.numpy_backend.contacts import ContactDetector  # noqa: E402
-from dynamix.scenes import build_ball_pile, build_bouncing_ball  # noqa: E402
+from dynamix.scenes import build_ball_box, build_ball_pile, build_bouncing_ball  # noqa: E402
 
 
 def contact_set(c, decimals=10):
@@ -110,6 +110,14 @@ def test_ball_pile_matches_numpy():
     np_buf, state = run_both(build_ball_pile(64, config=config), 400)
     np.testing.assert_allclose(np.asarray(state.q), np_buf.q, atol=1e-8)
     np.testing.assert_allclose(np.asarray(state.u), np_buf.u, atol=1e-8)
+
+
+def test_ball_box_matches_numpy():
+    side = 4
+    config = SimulationConfig(max_contacts=3 * side**2 * (side - 1) + 5 * side**2)
+    np_buf, state = run_both(build_ball_box(side, config=config), 200)
+    np.testing.assert_allclose(np.asarray(state.q), np_buf.q, atol=1e-10)
+    np.testing.assert_allclose(np.asarray(state.u), np_buf.u, atol=1e-10)
 
 
 def test_joint_and_contact_match_numpy():
