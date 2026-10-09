@@ -1,8 +1,8 @@
 """Bouncing ball on a plane: height over time and an animation.
 
 Usage: python examples/bouncing_ball.py [--height 1.0] [--restitution 0.8] [--seconds 3]
-                                        [--save ball.gif] [--no-show]
-Requires matplotlib (pip install -e ".[viz]").
+                                        [--backend numpy|jax] [--save ball.gif] [--no-show]
+Requires matplotlib (pip install -e ".[viz]"); the jax backend also needs ".[jax]".
 """
 
 import argparse
@@ -11,23 +11,31 @@ import numpy as np
 
 from dynamix.core import compile_scene
 from dynamix.ecs import SimulationConfig
-from dynamix.numpy_backend import Engine
 from dynamix.scenes import build_bouncing_ball
 
 FPS = 50
 
 
-def simulate(height, radius, restitution, seconds, dt=1e-3):
+def simulate(height, radius, restitution, seconds, dt=1e-3, backend="numpy"):
     buf = compile_scene(
         build_bouncing_ball(height, radius, 1.0, restitution, SimulationConfig(dt=dt))
     )
-    engine = Engine(buf)
     steps = int(round(seconds / dt))
-    z = np.empty(steps + 1)
-    z[0] = buf.q[0, 2]
-    for k in range(steps):
-        engine.step()
-        z[k + 1] = buf.q[0, 2]
+    if backend == "jax":
+        import dynamix.jax_backend as jb
+
+        # the JAX engine keeps its own state; ``buf`` is not updated
+        q = np.asarray(jb.Engine(buf).rollout(steps).q)
+        z = np.concatenate(([buf.q[0, 2]], q[:, 0, 2]))
+    else:
+        from dynamix.numpy_backend import Engine
+
+        engine = Engine(buf)
+        z = np.empty(steps + 1)
+        z[0] = buf.q[0, 2]
+        for k in range(steps):
+            engine.step()
+            z[k + 1] = buf.q[0, 2]
     return np.arange(steps + 1) * dt, z
 
 
@@ -37,11 +45,12 @@ def main() -> None:
     parser.add_argument("--radius", type=float, default=0.1)
     parser.add_argument("--restitution", type=float, default=0.8)
     parser.add_argument("--seconds", type=float, default=3.0)
+    parser.add_argument("--backend", choices=["numpy", "jax"], default="numpy")
     parser.add_argument("--save", default=None)
     parser.add_argument("--no-show", action="store_true")
     args = parser.parse_args()
 
-    t, z = simulate(args.height, args.radius, args.restitution, args.seconds)
+    t, z = simulate(args.height, args.radius, args.restitution, args.seconds, backend=args.backend)
     print(f"min centre height {z.min():.4f} (radius {args.radius})")
 
     import matplotlib

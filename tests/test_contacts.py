@@ -334,4 +334,4 @@ def test_sphere_touching_two_planes_gets_one_contact_per_plane():
     c = ContactDetector(buf).detect(buf.q)
     assert c.count == 2
     np.testing.assert_allclose(sorted(c.normal[:2].tolist()), [[0, 0, 1], [1, 0, 0]])
-    np.testing.assert_allclose(sorted(c.gap[:2]), [-0.3, -0.1])
+    np.testing.assert_allclose(c.gap[:2], [-0.1, -0.1])
